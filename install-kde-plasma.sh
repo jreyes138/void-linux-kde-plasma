@@ -1797,39 +1797,16 @@ config.tab_bar_at_bottom = false
 config.scrollback_lines = 10000
 
 -- ── Keybindings ─────────────────────────────────────────────────────
--- Ctrl+C: copy if text is selected, otherwise send SIGINT (Ctrl+C interrupt)
--- Ctrl+V: paste from clipboard
--- Ctrl+Shift+C/V: always copy/paste (unconditional)
+-- Ctrl+C: default behavior (SIGINT) — no override needed
+-- Ctrl+V: default behavior (paste in some terminals) — we override to paste
+-- Ctrl+Shift+C/V: always copy/paste (wezterm defaults, kept explicit)
 config.keys = {
   -- Ctrl+Shift+T = new tab
   { key = 'T', mods = 'CTRL|SHIFT', action = wezterm.action.SpawnTab 'CurrentPaneDomain' },
   -- Ctrl+Shift+W = close tab
   { key = 'W', mods = 'CTRL|SHIFT', action = wezterm.action.CloseCurrentTab { confirm = true } },
-  -- Ctrl+C = copy (if text selected) or send interrupt (if nothing selected)
-  {
-    key = 'C',
-    mods = 'CTRL',
-    action = wezterm.action_callback(function(window, pane)
-      local sel = window:get_selection_text_for_pane(pane)
-      if sel and sel ~= '' then
-        window:perform_action(
-          wezterm.action.CopyTo 'ClipboardAndPrimarySelection',
-          pane
-        )
-      else
-        window:perform_action(
-          wezterm.action.SendKey { key = 'C', mods = 'CTRL' },
-          pane
-        )
-      end
-    end),
-  },
-  -- Ctrl+V = paste
-  {
-    key = 'V',
-    mods = 'CTRL',
-    action = wezterm.action.PasteFrom 'Clipboard',
-  },
+  -- Ctrl+V = paste from clipboard
+  { key = 'V', mods = 'CTRL', action = wezterm.action.PasteFrom 'Clipboard' },
   -- Ctrl+Shift+C/V = copy/paste (unconditional)
   { key = 'C', mods = 'CTRL|SHIFT', action = wezterm.action.CopyTo 'Clipboard' },
   { key = 'V', mods = 'CTRL|SHIFT', action = wezterm.action.PasteFrom 'Clipboard' },
