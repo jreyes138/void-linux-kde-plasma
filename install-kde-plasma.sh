@@ -924,18 +924,6 @@ WPWRAPPER
     echo "[*] WirePlumber example config not found at $WP_CONF_SRC — skipping."
   fi
 
-  # Since pipewire.conf.d launches WirePlumber directly, the autostart
-  # .desktop file would cause a SECOND WirePlumber instance to start.
-  # Two WirePlumber instances fight over the ALSA device reservation
-  # (org.freedesktop.ReserveDevice1.Audio0), causing audio to fail.
-  # Disable the autostart file to prevent the duplicate.
-  if [ -L "$WP_CONF_DST" ] || [ -f "$WP_CONF_DST" ]; then
-    if [ -f /etc/xdg/autostart/wireplumber.desktop ]; then
-      rm -f /etc/xdg/autostart/wireplumber.desktop
-      echo "[*] Removed wireplumber.desktop autostart (launched via pipewire.conf.d instead)"
-    fi
-  fi
-
   # PulseAudio compatibility config
   PW_PULSE_SRC=/usr/share/examples/pipewire/20-pipewire-pulse.conf
   PW_PULSE_DST=/etc/pipewire/pipewire.conf.d/20-pipewire-pulse.conf
@@ -946,6 +934,21 @@ WPWRAPPER
     echo "[*] pipewire-pulse config symlink already exists."
   else
     echo "[*] pipewire-pulse example config not found at $PW_PULSE_SRC — skipping."
+  fi
+
+  # Since pipewire.conf.d launches WirePlumber and pipewire-pulse directly,
+  # the autostart .desktop files would cause DUPLICATE instances.
+  # Multiple WirePlumber/pipeWire-pulse instances fight over ALSA device
+  # reservation (org.freedesktop.ReserveDevice1.Audio0) and PulseAudio
+  # sockets, causing audio to fail with only "Dummy Output" as sink.
+  # Remove ALL autostart .desktop files — pipewire.conf.d handles everything.
+  if [ -L "$WP_CONF_DST" ] || [ -f "$WP_CONF_DST" ]; then
+    for autostart_file in wireplumber.desktop pipewire.desktop pipewire-pulse.desktop; do
+      if [ -f "/etc/xdg/autostart/$autostart_file" ]; then
+        rm -f "/etc/xdg/autostart/$autostart_file"
+        echo "[*] Removed $autostart_file autostart (launched via pipewire.conf.d)"
+      fi
+    done
   fi
 
   # ALSA config symlinks — route ALSA apps through PipeWire
