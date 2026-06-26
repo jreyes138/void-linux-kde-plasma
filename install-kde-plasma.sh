@@ -912,7 +912,7 @@ WPWRAPPER
   echo "[*] Creating PipeWire config symlinks..."
   mkdir -p /etc/pipewire/pipewire.conf.d
 
-  # WirePlumber session manager config
+  # WirePlumber session manager config — launches WirePlumber from PipeWire
   WP_CONF_SRC=/usr/share/examples/wireplumber/10-wireplumber.conf
   WP_CONF_DST=/etc/pipewire/pipewire.conf.d/10-wireplumber.conf
   if [ -f "$WP_CONF_SRC" ] && [ ! -L "$WP_CONF_DST" ]; then
@@ -922,6 +922,18 @@ WPWRAPPER
     echo "[*] WirePlumber config symlink already exists."
   else
     echo "[*] WirePlumber example config not found at $WP_CONF_SRC — skipping."
+  fi
+
+  # Since pipewire.conf.d launches WirePlumber directly, the autostart
+  # .desktop file would cause a SECOND WirePlumber instance to start.
+  # Two WirePlumber instances fight over the ALSA device reservation
+  # (org.freedesktop.ReserveDevice1.Audio0), causing audio to fail.
+  # Disable the autostart file to prevent the duplicate.
+  if [ -L "$WP_CONF_DST" ] || [ -f "$WP_CONF_DST" ]; then
+    if [ -f /etc/xdg/autostart/wireplumber.desktop ]; then
+      rm -f /etc/xdg/autostart/wireplumber.desktop
+      echo "[*] Removed wireplumber.desktop autostart (launched via pipewire.conf.d instead)"
+    fi
   fi
 
   # PulseAudio compatibility config
