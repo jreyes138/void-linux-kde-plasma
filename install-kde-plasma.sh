@@ -18,6 +18,7 @@
 #   --no-firmware    Skip linux-firmware installation (already installed or not needed)
 #   --no-flatpak     Skip Flatpak/Flathub setup and app installation
 #   --no-mainline    Skip linux-mainline kernel installation (keep stock kernel)
+#   --no-btrfs-compress  Skip btrfs zstd compression enablement (if btrfs root)
 #   --autologin USER Enable SDDM autologin for given user (e.g. --autologin joser)
 #
 # Gruvbox theme — enabled by default (dark variant + wallpaper):
@@ -45,6 +46,7 @@ EXTRAS=1
 FIRMWARE=1
 FLATPAK=1
 MAINLINE_KERNEL=1
+BTRFS_COMPRESS=1
 AUTOLOGIN=""
 LOG=/var/log/kde-plasma-install.log
 
@@ -70,6 +72,7 @@ while [ $# -gt 0 ]; do
     --no-firmware) FIRMWARE=0; shift ;;
     --no-flatpak)  FLATPAK=0; shift ;;
     --no-mainline) MAINLINE_KERNEL=0; shift ;;
+    --no-btrfs-compress) BTRFS_COMPRESS=0; shift ;;
     --autologin)   shift; AUTOLOGIN="${1:-}"; shift ;;
     --no-gruvbox)            GRUVBOX=0; shift ;;
     --gruvbox-light)         GRUVBOX_VARIANT="light"; shift ;;
@@ -94,7 +97,7 @@ if ! command -v xbps-install >/dev/null 2>&1; then
 fi
 
 echo "[*] Void Linux KDE Plasma installer (with hardware discovery)"
-echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} mainline=${MAINLINE_KERNEL} autologin=${AUTOLOGIN:-none} reboot=${REBOOT} gruvbox=${GRUVBOX}"
+echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} mainline=${MAINLINE_KERNEL} btrfs_compress=${BTRFS_COMPRESS} autologin=${AUTOLOGIN:-none} reboot=${REBOOT} gruvbox=${GRUVBOX}"
 echo "[*] Logging to ${LOG}"
 exec > >(tee -a "$LOG") 2>&1
 echo "[*] Started: $(date)"
@@ -294,11 +297,18 @@ if [ "$VIRT_PLATFORM" = "vmware" ] || [ "$VIRT_PLATFORM" = "virtualbox" ]; then
   VMWARE_TOOLS=1
 fi
 
+# Detect root filesystem type
+ROOT_FS_TYPE="unknown"
+ROOT_DEVICE=""
+ROOT_DEVICE=$(findmnt -no SOURCE / 2>/dev/null || true)
+ROOT_FS_TYPE=$(findmnt -no FSTYPE / 2>/dev/null || true)
+
 # ── print discovery results ───────────────────────────────────────────
 echo "  CPU vendor:        $CPU_VENDOR"
 echo "  GPU vendor:        $GPU_VENDOR"
 echo "  GPU model:         $GPU_MODEL"
 echo "  Virtualization:    $VIRT_PLATFORM"
+echo "  Root filesystem:   $ROOT_FS_TYPE ($ROOT_DEVICE)"
 echo "  Audio controller:  $([ $AUDIO_DETECTED -eq 1 ] && echo 'present' || echo 'none')"
 echo "  Bluetooth:         $([ $BLUETOOTH_DETECTED -eq 1 ] && echo 'present' || echo 'none')"
 echo "  Wi-Fi:             $([ $WIFI_DETECTED -eq 1 ] && echo 'present' || echo 'none')"
@@ -416,6 +426,132 @@ if [ "$MAINLINE_KERNEL" -eq 1 ]; then
   fi
 else
   echo "[*] Mainline kernel skipped (--no-mainline). Keeping stock LTS kernel."
+fi
+
+# ── Btrfs compression ────────────────────────────────────────────────
+# If the root filesystem is btrfs, enable zstd transparent compression
+# by adding compress=zstd to fstab and remounting. zstd gives good
+# compression ratios (typically 2-3x on system files) with fast
+# decompression. Also install snapper for snapshot management.
+# Disable with --no-btrfs-compress.
+echo ""
+echo "=== Step 3.4: Btrfs compression ==="
+BTRFS_ENABLED=0
+if [ "$ROOT_FS_TYPE" = "btrfs" ]; then
+  if [ "$BTRFS_COMPRESS" -eq 1 ]; then
+    echo "[*] Btrfs root filesystem detected on $ROOT_DEVICE"
+
+    # Check current mount options
+    CURRENT_OPTS=$(findmnt -no OPTIONS / 2>/dev/null || true)
+    if echo "$CURRENT_OPTS" | grep -q "compress=zstd"; then
+      echo "[*] zstd compression already enabled in mount options."
+      BTRFS_ENABLED=1
+    else
+      # Add compress=zstd to fstab
+      FSTAB=/etc/fstab
+      if grep -q "^[^#].* / btrfs" "$FSTAB" 2>/dev/null; then
+        # Replace the options field for the btrfs root mount
+        sed -i "s|\(^[^#].* / btrfs \)defaults|\1defaults,compress=zstd|" "$FSTAB"
+        echo "[*] Added compress=zstd to fstab for btrfs root."
+
+        # Remount to apply immediately
+        mount -o remount,compress=zstd / 2>/dev/null && \
+          echo "[*] Remounted / with compress=zstd" || \
+          echo "[!] Remount failed — compression will apply on next boot."
+
+        # Verify
+        NEW_OPTS=$(findmnt -no OPTIONS / 2>/dev/null || true)
+        if echo "$NEW_OPTS" | grep -q "compress=zstd"; then
+          echo "[*] Verified: zstd compression is active."
+          BTRFS_ENABLED=1
+        fi
+      else
+        echo "[!] Could not find btrfs root entry in fstab. Skipping compression."
+      fi
+    fi
+
+    # Install snapper for snapshot management
+    echo "[*] Installing snapper for btrfs snapshot management..."
+    xinstall snapper
+
+    # Configure snapper if not already configured
+    if [ ! -f /etc/snapper/configs/root ]; then
+      # snapper needs a config to function. Create one for the root subvolume.
+      # Find the root subvolume path
+      ROOT_SUBVOL=$(btrfs subvolume show / 2>/dev/null | head -1 | awk '{print $1}' || true)
+      if [ -n "$ROOT_SUBVOL" ]; then
+        echo "[*] Root subvolume: $ROOT_SUBVOL"
+      fi
+
+      # Create snapper config from the default template
+      if [ -f /etc/snapper/config-templates/default ]; then
+        cp /etc/snapper/config-templates/default /etc/snapper/configs/root
+        # Adjust the subvolume path to root
+        sed -i "s|^SUBVOLUME=.*|SUBVOLUME=\"/\"|" /etc/snapper/configs/root
+        echo "[*] Created snapper config for root subvolume."
+      else
+        echo "[!] No snapper config template found. Creating minimal config."
+        mkdir -p /etc/snapper/configs
+        cat > /etc/snapper/configs/root << 'SNAPPERCONF'
+# Snapper config for root filesystem
+SUBVOLUME="/"
+FSTYPE="btrfs"
+QGROUP=""
+
+# Limit the number of timeline snapshots
+TIMELINE_LIMIT_HOURLY="10"
+TIMELINE_LIMIT_DAILY="7"
+TIMELINE_LIMIT_WEEKLY="0"
+TIMELINE_LIMIT_MONTHLY="0"
+TIMELINE_LIMIT_YEARLY="0"
+
+# Number of snapshots to keep for cleanup
+EMPTY_LIMIT="2"
+NUMBER_LIMIT="50"
+NUMBER_LIMIT_IMPORTANT="10"
+
+# Cleanup settings
+EMPTY_PRE_POST_CLEANUP="yes"
+
+# Timeline settings
+TIMELINE_CREATE="yes"
+TIMELINE_CLEANUP="yes"
+
+# Number settings
+NUMBER_CLEANUP="yes"
+NUMBER_LIMIT="50"
+NUMBER_LIMIT_IMPORTANT="10"
+
+# Background monitoring
+BACKGROUND_LIMIT="10"
+SNAPPER_VERSION="0.9"
+SNAPPERCONF
+      fi
+
+      # Enable snapper runit services if available
+      for svc in snapperd snapper-timeline snapper-cleanup; do
+        if [ -d "/etc/sv/$svc" ]; then
+          ln -sf "/etc/sv/$svc" /var/service/
+          echo "[*] Enabled service: $svc"
+        fi
+      done
+    else
+      echo "[*] Snapper config already exists for root."
+    fi
+
+    # Enable btrfs quota for snapper snapshot space tracking
+    btrfs quota enable / 2>/dev/null && \
+      echo "[*] Enabled btrfs quota for snapshot space tracking." || \
+      echo "[!] Could not enable btrfs quota (may already be enabled)."
+
+  else
+    echo "[*] Btrfs root detected but compression skipped (--no-btrfs-compress)."
+  fi
+else
+  echo "[*] Root filesystem is $ROOT_FS_TYPE (not btrfs). Skipping compression."
+  if [ "$BTRFS_COMPRESS" -eq 1 ]; then
+    echo "    To use btrfs compression, install Void with btrfs as the root filesystem."
+  fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2445,6 +2581,22 @@ if [ "$MAINLINE_KERNEL" -eq 1 ]; then
   echo "    - linux           (stock LTS kernel) — fallback in GRUB menu"
 else
   echo "    - linux           (stock LTS kernel)"
+fi
+echo ""
+echo "  Filesystem:"
+if [ "$ROOT_FS_TYPE" = "btrfs" ]; then
+  echo "    - btrfs on $ROOT_DEVICE"
+  if [ "$BTRFS_ENABLED" -eq 1 ]; then
+    echo "    - zstd compression enabled (compress=zstd in fstab)"
+  fi
+  echo "    - snapper installed for snapshot management"
+  echo "    Useful commands:"
+  echo "      snapper list              — list snapshots"
+  echo "      snapper create -d 'desc'  — create snapshot"
+  echo "      snapper delete <num>      — delete snapshot"
+else
+  echo "    - $ROOT_FS_TYPE on $ROOT_DEVICE"
+  echo "    - No compression (btrfs required for zstd compression)"
 fi
 echo ""
 echo "  Enabled services (start on boot):"

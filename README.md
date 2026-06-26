@@ -53,6 +53,7 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 | `--no-firmware` | Skip linux-firmware installation |
 | `--no-flatpak` | Skip Flatpak/Flathub setup and app installation |
 | `--no-mainline` | Skip linux-mainline kernel installation (keep stock LTS kernel) |
+| `--no-btrfs-compress` | Skip btrfs zstd compression enablement (if btrfs root) |
 | `--autologin USER` | Enable SDDM autologin for the given user |
 
 ## Requirements
@@ -73,6 +74,13 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 - linux-mainline (latest upstream stable, 7.x series) — installed by default
 - linux (stock LTS kernel) — kept as fallback in GRUB menu
 - Use `--no-mainline` to skip mainline kernel installation
+
+### Btrfs Compression (automatic if btrfs root)
+- zstd transparent compression enabled via fstab (compress=zstd)
+- snapper installed for snapshot management (timeline + cleanup)
+- btrfs quota enabled for snapshot space tracking
+- Use `--no-btrfs-compress` to skip
+- Only activates if root filesystem is btrfs — install Void with btrfs to use
 
 ### Audio
 - pipewire, wireplumber, wireplumber-elogind, rtkit
