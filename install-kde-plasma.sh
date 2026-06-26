@@ -168,6 +168,16 @@ dl_file() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════
+# Phase 0: Install hardware detection tools
+# ═══════════════════════════════════════════════════════════════════════
+# A fresh Void base does NOT include lspci, lsusb, or lsmod.
+# These are needed for Phase 1 hardware discovery.
+echo ""
+echo "=== Step 0.1: Installing hardware detection tools ==="
+xbps-install -y -S xbps 2>/dev/null || true  # sync index first
+xinstall pciutils usbutils kmod
+
+# ═══════════════════════════════════════════════════════════════════════
 # HARDWARE DISCOVERY
 # ═══════════════════════════════════════════════════════════════════════
 echo ""
@@ -246,7 +256,7 @@ fi
 
 # Detect Bluetooth
 BLUETOOTH_DETECTED=0
-if lsusb 2>/dev/null | grep -qi 'bluetooth\|bt'; then
+if lsusb 2>/dev/null | grep -qi 'bluetooth'; then
   BLUETOOTH_DETECTED=1
 fi
 # Also check for bluetooth kernel module loaded
@@ -450,8 +460,8 @@ if [ "$ROOT_FS_TYPE" = "btrfs" ]; then
       # Add compress=zstd to fstab
       FSTAB=/etc/fstab
       if grep -q "^[^#].* / btrfs" "$FSTAB" 2>/dev/null; then
-        # Replace the options field for the btrfs root mount
-        sed -i "s|\(^[^#].* / btrfs \)defaults|\1defaults,compress=zstd|" "$FSTAB"
+        # Replace the options field for the btrfs root mount only (exact " / " match)
+        sed -i "s|\(^[^#]\S\+\s\+/\s\+btrfs\s\+\)defaults|\1defaults,compress=zstd|" "$FSTAB"
         echo "[*] Added compress=zstd to fstab for btrfs root."
 
         # Remount to apply immediately
@@ -1175,7 +1185,6 @@ if [ -f /etc/sv/sddm/run ] && ! grep -q 'pgrep -x elogind' /etc/sv/sddm/run 2>/d
   cat > /etc/sv/sddm/run << 'SDDMRUN'
 #!/bin/sh
 exec 2>&1
-set -e
 sv check dbus >/dev/null || exit 1
 
 # Only dbus-activate elogind if it is not already running.
@@ -1187,7 +1196,7 @@ if [ -x /usr/bin/elogind-inhibit ] && ! pgrep -x elogind >/dev/null 2>&1; then
         dbus-send --system --print-reply --dest=org.freedesktop.DBus \
                 /org/freedesktop/DBus \
                 org.freedesktop.DBus.StartServiceByName \
-                string:org.freedesktop.login1 uint32:0
+                string:org.freedesktop.login1 uint32:0 2>/dev/null || true
 fi
 
 # respect system locale
@@ -1398,7 +1407,7 @@ if dl_file "$WEZTERM_NIGHTLY_URL" "$WEZTERM_NIGHTLY_TAR"; then
   mkdir -p /tmp/wezterm-nightly-extract
   tar -xf "$WEZTERM_NIGHTLY_TAR" -C /tmp/wezterm-nightly-extract/ 2>/dev/null
   if [ -f /tmp/wezterm-nightly-extract/wezterm/usr/bin/wezterm ]; then
-    cp -r /tmp/wezterm-nightly-extract/wezterm/usr/* /usr/
+    cp -r /tmp/wezterm-nightly-extract/wezterm/usr/* /usr/ 2>/dev/null || true
     rm -rf /tmp/wezterm-nightly-extract "$WEZTERM_NIGHTLY_TAR"
     WEZTERM_VERSION=$(wezterm --version 2>/dev/null || echo "unknown")
     echo "[*] wezterm nightly installed: $WEZTERM_VERSION"
@@ -1765,7 +1774,7 @@ if [ -f "$WEZTERM_DESKTOP" ]; then
   echo "[*] Set wezterm as default terminal system-wide (/etc/xdg/mimeapps.list)"
 
   # Update the MIME database
-  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database 2>/dev/null || true
 
   echo "[*] wezterm is now the default terminal emulator."
   echo "[*] KDE Plasma will use wezterm for Ctrl+Alt+T and terminal actions."
@@ -2032,8 +2041,9 @@ if flatpak remotes 2>/dev/null | grep -q 'flathub'; then
   echo "[*] Flathub remote already exists."
 else
   flatpak remote-add --if-not-exists flathub \
-    https://dl.flathub.org/repo/flathub.flatpakrepo
-  echo "[*] Flathub remote added."
+    https://dl.flathub.org/repo/flathub.flatpakrepo 2>/dev/null && \
+    echo "[*] Flathub remote added." || \
+    echo "[!] Failed to add Flathub remote. Flatpak apps may not install."
 fi
 
 # ── Install xdg-desktop-portal for Flatpak ↔ KDE integration ─────────
@@ -2050,8 +2060,7 @@ echo "=== Step 13.4: Installing Brave Browser ==="
 if flatpak list 2>/dev/null | grep -q 'com.brave.Browser'; then
   echo "[*] Brave Browser already installed."
 else
-  flatpak install -y flathub com.brave.Browser || echo "[!] Brave Browser install failed — try manually: flatpak install flathub com.brave.Browser"
-  echo "[*] Brave Browser installed."
+  flatpak install -y flathub com.brave.Browser 2>/dev/null && echo "[*] Brave Browser installed." || echo "[!] Brave Browser install failed — try manually: flatpak install flathub com.brave.Browser"
 fi
 
 # ── Install Tutanota (Tuta) ───────────────────────────────────────────
@@ -2063,14 +2072,13 @@ echo "=== Step 13.5: Installing Tutanota (Tuta) ==="
 if flatpak list 2>/dev/null | grep -q 'com.tutanota.Tutanota'; then
   echo "[*] Tutanota already installed."
 else
-  flatpak install -y flathub com.tutanota.Tutanota || echo "[!] Tutanota install failed — try manually: flatpak install flathub com.tutanota.Tutanota"
-  echo "[*] Tutanota installed."
+  flatpak install -y flathub com.tutanota.Tutanota 2>/dev/null && echo "[*] Tutanota installed." || echo "[!] Tutanota install failed — try manually: flatpak install flathub com.tutanota.Tutanota"
 fi
 
 # ── Update flatpak desktop database ───────────────────────────────────
 echo ""
 echo "=== Step 13.6: Updating desktop database ==="
-command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database 2>/dev/null || true
 echo "[*] Desktop database updated — apps visible in KDE menu."
 
 echo ""
@@ -2176,8 +2184,8 @@ if [ "$GRUVBOX" -eq 1 ]; then
         fi
         if [ "$GRUVBOX_ICONS" -eq 1 ]; then
           ICON_REPO="$G_USER_HOME/gruvbox-plus-icon-pack"
-          [ -d "$ICON_REPO/Gruvbox-Plus-Dark" ] && ln -sf "$ICON_REPO/Gruvbox-Plus-Dark" "$ICONS_DIR/Gruvbox-Plus-Dark"
-          [ -d "$ICON_REPO/Gruvbox-Plus-Light" ] && ln -sf "$ICON_REPO/Gruvbox-Plus-Light" "$ICONS_DIR/Gruvbox-Plus-Light"
+          [ -d "$ICON_REPO/Gruvbox-Plus-Dark" ] && rm -rf "$ICONS_DIR/Gruvbox-Plus-Dark" && ln -sf "$ICON_REPO/Gruvbox-Plus-Dark" "$ICONS_DIR/Gruvbox-Plus-Dark"
+          [ -d "$ICON_REPO/Gruvbox-Plus-Light" ] && rm -rf "$ICONS_DIR/Gruvbox-Plus-Light" && ln -sf "$ICON_REPO/Gruvbox-Plus-Light" "$ICONS_DIR/Gruvbox-Plus-Light"
         fi
       else
         echo "[*] Downloading icon pack from: $ICON_RELEASE_URL"
