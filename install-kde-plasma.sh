@@ -183,12 +183,6 @@ GPU_PCI_LINE=$(lspci -nn 2>/dev/null | grep -iE 'vga|3d|display' | head -1 || tr
 if echo "$GPU_PCI_LINE" | grep -qi 'nvidia'; then
   GPU_VENDOR="nvidia"
   GPU_MODEL=$(echo "$GPU_PCI_LINE" | sed 's/.*:\s*//; s/ *\[.*//')
-elif echo "$GPU_PCI_LINE" | grep -qi 'advanced micro devices\|amd\|ati\|radeon'; then
-  GPU_VENDOR="amd"
-  GPU_MODEL=$(echo "$GPU_PCI_LINE" | sed 's/.*:\s*//; s/ *\[.*//')
-elif echo "$GPU_PCI_LINE" | grep -qi 'intel'; then
-  GPU_VENDOR="intel"
-  GPU_MODEL=$(echo "$GPU_PCI_LINE" | sed 's/.*:\s*//; s/ *\[.*//')
 elif echo "$GPU_PCI_LINE" | grep -qi 'qxl'; then
   GPU_VENDOR="qxl"
   GPU_MODEL="Red Hat QXL paravirtual graphics"
@@ -201,6 +195,12 @@ elif echo "$GPU_PCI_LINE" | grep -qi 'vmware\|svga'; then
 elif echo "$GPU_PCI_LINE" | grep -qi 'hyper-v\|microsoft'; then
   GPU_VENDOR="hyperv"
   GPU_MODEL="Hyper-V Virtual GPU"
+elif echo "$GPU_PCI_LINE" | grep -qi 'advanced micro devices\|amd\|radeon'; then
+  GPU_VENDOR="amd"
+  GPU_MODEL=$(echo "$GPU_PCI_LINE" | sed 's/.*:\s*//; s/ *\[.*//')
+elif echo "$GPU_PCI_LINE" | grep -qi 'intel'; then
+  GPU_VENDOR="intel"
+  GPU_MODEL=$(echo "$GPU_PCI_LINE" | sed 's/.*:\s*//; s/ *\[.*//')
 elif [ -n "$GPU_PCI_LINE" ]; then
   GPU_VENDOR="unknown"
   GPU_MODEL=$(echo "$GPU_PCI_LINE" | sed 's/.*:\s*//; s/ *\[.*//')
@@ -1083,10 +1083,10 @@ Session="
   # support), wayland for everything else (Plasma 6 default).
   SDDM_DISPLAY_SERVER="wayland"
   SDDM_GREETER_ENV="QT_WAYLAND_SHELL_INTEGRATION=layer-shell"
-  if [ "$GPU_VENDOR" = "qxl" ] || [ "$VIRT_PLATFORM" = "qemu-kvm" ] && [ "$GPU_VENDOR" = "qxl" ]; then
+  if [ "$GPU_VENDOR" = "qxl" ] || [ "$GPU_VENDOR" = "virtio" ] && [ "$VIRT_PLATFORM" != "none" ]; then
     SDDM_DISPLAY_SERVER="x11"
     SDDM_GREETER_ENV=""
-    echo "[*] QXL GPU detected — SDDM will use X11 greeter (QXL has no Wayland/Vulkan support)"
+    echo "[*] QXL/virtio GPU in VM detected — SDDM will use X11 greeter (no Wayland/Vulkan support)"
   fi
 
   cat > "$SDDM_CONF" << SDDMCONF
@@ -2365,11 +2365,44 @@ BASHRCEOF
       fi
 
       if [ "$GRUVBOX_WALLPAPER" -eq 1 ] && [ -n "$WP_FILE" ] && [ -f "$WP_FILE" ]; then
-        # Wallpaper will be applied after first login via plasma-apply-wallpaperimage
-        # Can't apply live during install (no Plasma session yet)
+        # Write wallpaper into Plasma desktop config so it applies on first login.
+        # plasma-org.kde.plasma.desktop-appletsrc stores the wallpaper image path
+        # under [Containments][1][Wallpaper][org.kde.image][General][Image].
+        APPLET_SRC="$G_USER_HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
+        mkdir -p "$G_USER_HOME/.config"
+
+        # If the file exists and already has an Image= key, replace it.
+        # If it exists but has no Image= key, add one under the image wallpaper config.
+        # If it doesn't exist, create a minimal config with the wallpaper set.
+        if [ -f "$APPLET_SRC" ]; then
+          if grep -q "^Image=" "$APPLET_SRC" 2>/dev/null; then
+            sed -i "s|^Image=.*|Image=file://$WP_FILE|" "$APPLET_SRC"
+          else
+            # Append wallpaper config section
+            echo "" >> "$APPLET_SRC"
+            echo "[Containments][1][Wallpaper][org.kde.image][General]" >> "$APPLET_SRC"
+            echo "Image=file://$WP_FILE" >> "$APPLET_SRC"
+          fi
+        else
+          # Create minimal appletsrc with desktop containment + wallpaper
+          cat > "$APPLET_SRC" << WPAPPLET
+[Containments][1]
+activityId=
+formfactor=0
+immutability=1
+lastScreen=0
+location=0
+plugin=org.kde.plasma.folder
+wallpaperplugin=org.kde.image
+
+[Containments][1][Wallpaper][org.kde.image][General]
+Image=file://$WP_FILE
+WPAPPLET
+        fi
+        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$APPLET_SRC"
+
         echo "[*] Wallpaper saved to $WP_FILE"
-        echo "[*] Will appear after first login — or apply manually via"
-        echo "    System Settings > Wallpaper > Add Image"
+        echo "[*] Wallpaper set in Plasma config — will apply on first login"
       fi
     fi
 
