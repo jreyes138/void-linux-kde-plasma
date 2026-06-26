@@ -17,6 +17,7 @@
 #   --no-extras      Skip optional packages (sounds, browser integration, thumbnails)
 #   --no-firmware    Skip linux-firmware installation (already installed or not needed)
 #   --no-flatpak     Skip Flatpak/Flathub setup and app installation
+#   --no-mainline    Skip linux-mainline kernel installation (keep stock kernel)
 #   --autologin USER Enable SDDM autologin for given user (e.g. --autologin joser)
 #
 # Gruvbox theme — enabled by default (dark variant + wallpaper):
@@ -43,6 +44,7 @@ WAYLAND=0
 EXTRAS=1
 FIRMWARE=1
 FLATPAK=1
+MAINLINE_KERNEL=1
 AUTOLOGIN=""
 LOG=/var/log/kde-plasma-install.log
 
@@ -67,6 +69,7 @@ while [ $# -gt 0 ]; do
     --no-extras)   EXTRAS=0; shift ;;
     --no-firmware) FIRMWARE=0; shift ;;
     --no-flatpak)  FLATPAK=0; shift ;;
+    --no-mainline) MAINLINE_KERNEL=0; shift ;;
     --autologin)   shift; AUTOLOGIN="${1:-}"; shift ;;
     --no-gruvbox)            GRUVBOX=0; shift ;;
     --gruvbox-light)         GRUVBOX_VARIANT="light"; shift ;;
@@ -91,7 +94,7 @@ if ! command -v xbps-install >/dev/null 2>&1; then
 fi
 
 echo "[*] Void Linux KDE Plasma installer (with hardware discovery)"
-echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} autologin=${AUTOLOGIN:-none} reboot=${REBOOT} gruvbox=${GRUVBOX}"
+echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} mainline=${MAINLINE_KERNEL} autologin=${AUTOLOGIN:-none} reboot=${REBOOT} gruvbox=${GRUVBOX}"
 echo "[*] Logging to ${LOG}"
 exec > >(tee -a "$LOG") 2>&1
 echo "[*] Started: $(date)"
@@ -357,6 +360,32 @@ case "$CPU_VENDOR" in
     echo "[*] CPU vendor unknown ($CPU_VENDOR). Skipping microcode installation."
     ;;
 esac
+
+# ── Mainline kernel ──────────────────────────────────────────────────
+# Void ships the stock LTS kernel (linux) by default. linux-mainline
+# tracks the latest upstream stable release (currently 7.x series).
+# Installing it gives you the newest kernel features, hardware support,
+# and security fixes. The stock kernel is kept as a fallback — both
+# appear in the GRUB menu at boot.
+# Disable with --no-mainline to stay on the stock LTS kernel.
+echo ""
+echo "=== Step 3.3: Mainline kernel ==="
+if [ "$MAINLINE_KERNEL" -eq 1 ]; then
+  echo "[*] Installing linux-mainline (latest upstream stable kernel, 7.x series)."
+  echo "    The stock LTS kernel (linux) remains installed as a fallback."
+  xinstall linux-mainline
+
+  # Verify the mainline kernel was actually installed
+  if xbps-query linux-mainline >/dev/null 2>&1; then
+    MAINLINE_VERSION=$(xbps-query linux-mainline 2>/dev/null | grep -oP 'pkgver:\s*\K\S+' || echo "unknown")
+    echo "[*] linux-mainline installed: version ${MAINLINE_VERSION}"
+  else
+    echo "[!] WARNING: linux-mainline did not install successfully."
+    echo "[!] The stock kernel (linux) is still present and bootable."
+  fi
+else
+  echo "[*] Mainline kernel skipped (--no-mainline). Keeping stock LTS kernel."
+fi
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 4: Core desktop installation
@@ -2333,6 +2362,14 @@ echo "    Bluetooth: $([ $BLUETOOTH_DETECTED -eq 1 ] && echo 'yes' || echo 'no')
 echo "    Wi-Fi:     $([ $WIFI_DETECTED -eq 1 ] && echo 'yes' || echo 'no')"
 echo "    Touchpad:  $([ $TOUCHPAD_DETECTED -eq 1 ] && echo 'yes' || echo 'no')"
 echo "    Wacom:     $([ $WACOM_DETECTED -eq 1 ] && echo 'yes' || echo 'no')"
+echo ""
+echo "  Kernel:"
+if [ "$MAINLINE_KERNEL" -eq 1 ]; then
+  echo "    - linux-mainline  (latest upstream stable, 7.x series) — default boot"
+  echo "    - linux           (stock LTS kernel) — fallback in GRUB menu"
+else
+  echo "    - linux           (stock LTS kernel)"
+fi
 echo ""
 echo "  Enabled services (start on boot):"
 echo "    - dbus           (/var/service/dbus)"

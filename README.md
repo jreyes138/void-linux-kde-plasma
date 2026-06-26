@@ -5,7 +5,8 @@ Automated KDE Plasma installation script for Void Linux with hardware discovery,
 ## Features
 
 - **Hardware discovery** — detects GPU, audio, Bluetooth, Wi-Fi, touchpad, Wacom, and VM platform before installing only what's needed
-- **13-phase install** — xbps self-update, full system upgrade, firmware/microcode, core desktop, GPU drivers, input drivers, audio, network/Bluetooth, VM guest tools, SDDM, CLI tools/fonts/shell, themes, Flatpak apps
+- **Mainline kernel** — installs linux-mainline (latest upstream stable, 7.x series) by default, stock LTS kernel kept as fallback
+- **13-phase install** — xbps self-update, full system upgrade, firmware/microcode, mainline kernel, core desktop, GPU drivers, input drivers, audio, network/Bluetooth, VM guest tools, SDDM, CLI tools/fonts/shell, themes, Flatpak apps
 - **PipeWire/WirePlumber audio** — D-Bus session bus wrapper for KDE's `dbus-run-session`, config symlinks, ALSA integration
 - **elogind boot race fix** — inlined wrapper + wait loop prevents runit from flapping to "down"
 - **Breeze Dark theme** — pre-configured via kdeglobals so dark theme is active on first login
@@ -51,6 +52,7 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 | `--no-extras` | Skip optional packages (sounds, browser integration, thumbnails) |
 | `--no-firmware` | Skip linux-firmware installation |
 | `--no-flatpak` | Skip Flatpak/Flathub setup and app installation |
+| `--no-mainline` | Skip linux-mainline kernel installation (keep stock LTS kernel) |
 | `--autologin USER` | Enable SDDM autologin for the given user |
 
 ## Requirements
@@ -66,6 +68,11 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 - elogind (session/seat management with boot race fix)
 - xorg or xorg-minimal (based on --minimal flag)
 - GPU driver auto-detection: Intel, AMD, NVIDIA (nouveau), QXL, virtio, VMware
+
+### Kernel
+- linux-mainline (latest upstream stable, 7.x series) — installed by default
+- linux (stock LTS kernel) — kept as fallback in GRUB menu
+- Use `--no-mainline` to skip mainline kernel installation
 
 ### Audio
 - pipewire, wireplumber, wireplumber-elogind, rtkit
