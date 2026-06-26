@@ -3,6 +3,8 @@
 # install-kde-plasma.sh
 # Automates KDE Plasma installation on a fresh Void Linux base install.
 # Performs hardware discovery first, then installs only what's needed.
+# Optionally installs a full Gruvbox theme (color scheme, icons, Kvantum,
+# fastfetch, wallpaper) for Plasma 6.
 #
 # Usage:
 #   sudo bash install-kde-plasma.sh
@@ -16,6 +18,15 @@
 #   --no-firmware    Skip linux-firmware installation (already installed or not needed)
 #   --no-flatpak     Skip Flatpak/Flathub setup and app installation
 #   --autologin USER Enable SDDM autologin for given user (e.g. --autologin joser)
+#
+# Gruvbox theme — enabled by default (dark variant + wallpaper):
+#   --no-gruvbox              Disable Gruvbox theming entirely
+#   --gruvbox-light           Use light variant (default: dark)
+#   --no-gruvbox-icons        Skip Gruvbox Plus icon pack
+#   --no-gruvbox-kvantum      Skip Kvantum theme
+#   --no-gruvbox-fastfetch    Skip fastfetch installation
+#   --no-gruvbox-wallpaper    Skip wallpaper installation
+#   --gruvbox-wallpaper PATH  Use local wallpaper file instead of downloading default
 #
 
 # Re-exec with bash if not already running under bash
@@ -35,6 +46,18 @@ FLATPAK=1
 AUTOLOGIN=""
 LOG=/var/log/kde-plasma-install.log
 
+# Gruvbox theme — enabled by default (dark variant + wallpaper)
+# Applied after install, before reboot. Disable with --no-gruvbox.
+GRUVBOX=1
+GRUVBOX_VARIANT="dark"
+GRUVBOX_ICONS=1
+GRUVBOX_KVANTUM=1
+GRUVBOX_FASTFETCH=1
+GRUVBOX_WALLPAPER=1
+GRUVBOX_WALLPAPER_PATH=""
+GRUVBOX_WALLPAPER_URL="https://gruvbox-wallpapers.pages.dev/wallpapers/vector%20graphics/chillhop.com-cosy_retreat.png"
+GRUVBOX_WALLPAPER_FILENAME="chillhop-cosy_retreat.png"
+
 # ── parse args ───────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -45,6 +68,13 @@ while [ $# -gt 0 ]; do
     --no-firmware) FIRMWARE=0; shift ;;
     --no-flatpak)  FLATPAK=0; shift ;;
     --autologin)   shift; AUTOLOGIN="${1:-}"; shift ;;
+    --no-gruvbox)            GRUVBOX=0; shift ;;
+    --gruvbox-light)         GRUVBOX_VARIANT="light"; shift ;;
+    --no-gruvbox-icons)      GRUVBOX_ICONS=0; shift ;;
+    --no-gruvbox-kvantum)    GRUVBOX_KVANTUM=0; shift ;;
+    --no-gruvbox-fastfetch)  GRUVBOX_FASTFETCH=0; shift ;;
+    --no-gruvbox-wallpaper)  GRUVBOX_WALLPAPER=0; shift ;;
+    --gruvbox-wallpaper)     shift; GRUVBOX_WALLPAPER_PATH="${1:-}"; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -61,7 +91,7 @@ if ! command -v xbps-install >/dev/null 2>&1; then
 fi
 
 echo "[*] Void Linux KDE Plasma installer (with hardware discovery)"
-echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} autologin=${AUTOLOGIN:-none} reboot=${REBOOT}"
+echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} autologin=${AUTOLOGIN:-none} reboot=${REBOOT} gruvbox=${GRUVBOX}"
 echo "[*] Logging to ${LOG}"
 exec > >(tee -a "$LOG") 2>&1
 echo "[*] Started: $(date)"
@@ -411,6 +441,17 @@ echo "=== Step 4.2: Installing kde-plasma, kde-baseapps, sddm, and core deps ===
 # konsole is KDE's default terminal — needed as fallback even with wezterm
 xinstall kde-plasma kde-baseapps sddm dbus polkit-elogind xdg-utils konsole
 
+# ── Archive tools (Dolphin extract/compress integration) ─────────────
+# ark: KDE archiver — provides Dolphin right-click "Extract" and
+#   "Compress" service menus. Without it, Dolphin can't extract or
+#   create archives from the context menu.
+# unzip: ZIP extraction (CLI backend ark uses for .zip)
+# zip: ZIP creation (CLI backend ark uses to create .zip)
+# 7zip: handles .7z, .rar, and other formats (replaces deprecated p7zip)
+echo ""
+echo "=== Step 4.2b: Installing archive tools (ark, unzip, zip, 7zip) ==="
+xinstall ark unzip zip 7zip
+
 # ── Xorg ─────────────────────────────────────────────────────────────
 echo ""
 echo "=== Step 4.3: Installing Xorg ==="
@@ -469,6 +510,14 @@ case "$GPU_VENDOR" in
       # but install explicitly to be sure.
       xinstall xf86-video-qxl
     fi
+    # QXL has no Vulkan support. Without this, Mesa tries Zink (GL-over-
+    # Vulkan), fails with VK_ERROR_INITIALIZATION_FAILED, and KWin hangs
+    # for ~30 seconds before falling back to software rendering. Force
+    # software GL from the start to eliminate the timeout.
+    echo "[*] QXL has no Vulkan — enabling software GL to avoid Zink timeout."
+    mkdir -p /etc/environment.d
+    echo "LIBGL_ALWAYS_SOFTWARE=1" > /etc/environment.d/00-software-gl.conf
+    echo "[*] Set LIBGL_ALWAYS_SOFTWARE=1 in /etc/environment.d/"
     ;;
   virtio)
     echo "[*] virtio-gpu detected. Using modesetting with mesa-dri."
@@ -739,6 +788,25 @@ for user_home in /home/*; do
   fi
 done
 
+# Ensure all users are in the wheel group (Void's sudo group).
+# /etc/sudoers.d/wheel grants %wheel ALL=(ALL:ALL) ALL — but if the
+# user wasn't added to wheel during base install, sudo is silently
+# broken and there's no error until they try to use it.
+# Also add audio/video/input groups — elogind handles these via logind
+# seats on modern systems, but having them doesn't hurt and some
+# legacy ALSA paths still check them.
+echo ""
+echo "=== Step 8.1b: Ensuring user groups (wheel, audio, video, input) ==="
+for user_home in /home/*; do
+  username=$(basename "$user_home")
+  id "$username" >/dev/null 2>&1 || continue
+  for grp in wheel audio video input; do
+    if ! id -nG "$username" | grep -qw "$grp"; then
+      usermod -aG "$grp" "$username" 2>/dev/null && echo "[*] Added $username to $grp group"
+    fi
+  done
+done
+
 # ── Bluetooth (only if detected) ──────────────────────────────────────
 echo ""
 echo "=== Step 8.2: Bluetooth ==="
@@ -837,6 +905,25 @@ fi
 sleep 2
 sv status dbus 2>/dev/null || sv up dbus 2>/dev/null || true
 
+# ── zramen (zram swap) ───────────────────────────────────────────────
+echo ""
+echo "=== Step 10.1b: Enabling zramen (zram swap) ==="
+# zramen creates a compressed swap device in RAM using lz4.
+# Default: 25% of RAM as zram size, priority 32767 (highest).
+# This reduces disk I/O and improves responsiveness on low-RAM systems
+# and VMs. Especially useful for Void VMs with limited disk I/O.
+xinstall zramen
+if [ -L /var/service/zramen ]; then
+  echo "[*] zramen already enabled."
+else
+  ln -s /etc/sv/zramen /var/service/
+  echo "[*] zramen symlink created."
+fi
+# Give runit a moment to pick it up
+sleep 1
+sv status zramen 2>/dev/null || true
+echo "[*] zramen service enabled — zram swap will start on boot."
+
 # ── SDDM test then enable ─────────────────────────────────────────────
 echo ""
 echo "=== Step 10.2: Testing and enabling SDDM display manager ==="
@@ -868,6 +955,49 @@ fi
 rm -f /etc/sv/sddm/down
 echo "[*] SDDM down file removed — service now enabled for boot."
 
+# ── Patch SDDM run script (elogind double-start fix) ─────────────────
+# The stock Void SDDM run script unconditionally calls
+# dbus-send StartServiceByName org.freedesktop.login1, which tries to
+# D-Bus activate a second elogind instance. Since elogind already runs
+# as a runit service, the second instance prints "elogind is already
+# running as pid X" on the login screen and causes a long delay before
+# login completes. Fix: only call dbus-send if elogind is NOT already
+# running.
+echo ""
+echo "=== Step 10.2b: Patching SDDM run script (elogind fix) ==="
+if [ -f /etc/sv/sddm/run ] && ! grep -q 'pgrep -x elogind' /etc/sv/sddm/run 2>/dev/null; then
+  cp /etc/sv/sddm/run /etc/sv/sddm/run.orig 2>/dev/null || true
+  cat > /etc/sv/sddm/run << 'SDDMRUN'
+#!/bin/sh
+exec 2>&1
+set -e
+sv check dbus >/dev/null || exit 1
+
+# Only dbus-activate elogind if it is not already running.
+# On Void, elogind runs as a runit service. The stock SDDM run script
+# unconditionally calls StartServiceByName org.freedesktop.login1,
+# which tries to start a second elogind instance that prints
+# "elogind is already running as pid X" on the login screen.
+if [ -x /usr/bin/elogind-inhibit ] && ! pgrep -x elogind >/dev/null 2>&1; then
+        dbus-send --system --print-reply --dest=org.freedesktop.DBus \
+                /org/freedesktop/DBus \
+                org.freedesktop.DBus.StartServiceByName \
+                string:org.freedesktop.login1 uint32:0
+fi
+
+# respect system locale
+[ -r /etc/locale.conf ] && . /etc/locale.conf && export LANG
+
+[ -f ./conf ] && . ./conf
+
+exec sddm 2>&1
+SDDMRUN
+  chmod 755 /etc/sv/sddm/run
+  echo "[*] Patched /etc/sv/sddm/run — elogind double-start fix"
+else
+  echo "[*] SDDM run script already patched (or not found)."
+fi
+
 # ── Configure SDDM theme and settings ────────────────────────────────
 echo ""
 echo "=== Step 10.3: Configuring SDDM theme ==="
@@ -889,13 +1019,23 @@ User=
 Session="
   fi
 
+  # Determine SDDM display server: use x11 for QXL VMs (no Vulkan/Wayland
+  # support), wayland for everything else (Plasma 6 default).
+  SDDM_DISPLAY_SERVER="wayland"
+  SDDM_GREETER_ENV="QT_WAYLAND_SHELL_INTEGRATION=layer-shell"
+  if [ "$GPU_VENDOR" = "qxl" ] || [ "$VIRT_PLATFORM" = "qemu-kvm" ] && [ "$GPU_VENDOR" = "qxl" ]; then
+    SDDM_DISPLAY_SERVER="x11"
+    SDDM_GREETER_ENV=""
+    echo "[*] QXL GPU detected — SDDM will use X11 greeter (QXL has no Wayland/Vulkan support)"
+  fi
+
   cat > "$SDDM_CONF" << SDDMCONF
 ${AUTOLOGIN_SECTION}
 
 [General]
-# Use Wayland for the greeter (Plasma 6 default); fall back to x11 if issues
-DisplayServer=wayland
-GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+# SDDM greeter display server (x11 for QXL VMs, wayland otherwise)
+DisplayServer=${SDDM_DISPLAY_SERVER}
+${SDDM_GREETER_ENV:+GreeterEnvironment=${SDDM_GREETER_ENV}}
 Numlock=none
 HaltCommand=/usr/bin/loginctl poweroff
 RebootCommand=/usr/bin/loginctl reboot
@@ -919,9 +1059,91 @@ SDDMCONF
   fi
 else
   echo "[*] $SDDM_CONF already exists — not overwriting."
-  echo "    To apply breeze theme manually, add/modify in [Theme] section:"
-  echo "    Current=breeze"
+  echo "    To apply theme manually, add/modify in [Theme] section:"
+  echo "    Current=<theme-name>"
   echo "    CursorTheme=breeze_cursors"
+fi
+
+# ── Gruvbox SDDM theme (if gruvbox is enabled) ──────────────────────
+if [ "$GRUVBOX" -eq 1 ]; then
+  echo ""
+  echo "=== Step 10.3b: Installing Gruvbox SDDM theme ==="
+  # he1senbrg/sddm-gruvbox — QML theme, Qt6 compatible, Plasma 6 ready
+  SDDM_GRUVBOX_ZIP="/tmp/sddm-gruvbox.zip"
+  SDDM_GRUVBOX_DIR="/usr/share/sddm/themes/sddm-gruvbox"
+
+  if [ -d "$SDDM_GRUVBOX_DIR" ] && [ -f "$SDDM_GRUVBOX_DIR/metadata.desktop" ]; then
+    echo "[*] Gruvbox SDDM theme already installed."
+  else
+    echo "[*] Downloading sddm-gruvbox v1.1.0..."
+    if curl -sL "https://github.com/he1senbrg/sddm-gruvbox/releases/download/v1.1.0/sddm-gruvbox.zip" \
+      -o "$SDDM_GRUVBOX_ZIP" 2>/dev/null && [ -s "$SDDM_GRUVBOX_ZIP" ]; then
+      echo "[*] Downloaded sddm-gruvbox.zip ($(du -h "$SDDM_GRUVBOX_ZIP" | cut -f1))"
+
+      # Extract and install
+      mkdir -p /tmp/sddm-gruvbox-extract
+      unzip -q -o "$SDDM_GRUVBOX_ZIP" -d /tmp/sddm-gruvbox-extract/ 2>/dev/null
+      mkdir -p "$SDDM_GRUVBOX_DIR"
+      cp -r /tmp/sddm-gruvbox-extract/sddm-gruvbox/* "$SDDM_GRUVBOX_DIR/" 2>/dev/null
+      rm -rf /tmp/sddm-gruvbox-extract "$SDDM_GRUVBOX_ZIP"
+
+      if [ -f "$SDDM_GRUVBOX_DIR/metadata.desktop" ]; then
+        echo "[*] Gruvbox SDDM theme installed to $SDDM_GRUVBOX_DIR"
+      else
+        echo "[!] Failed to install Gruvbox SDDM theme — files missing after extract."
+      fi
+    else
+      echo "[!] Failed to download sddm-gruvbox.zip. SDDM will use default theme."
+    fi
+  fi
+
+  # Gruvbox SDDM theme — standard Gruvbox Dark palette
+  # he1senbrg/sddm-gruvbox ships with non-standard colors.
+  # We overwrite theme.conf with the real gruvbox palette after install.
+  if [ -f "$SDDM_GRUVBOX_DIR/theme.conf" ]; then
+    cat > "$SDDM_GRUVBOX_DIR/theme.conf" << 'SDDMTHEMECONF'
+[General]
+Font="Noto Sans"
+FontSize=10
+
+PasswordShowLastLetter=0
+
+# [Colors] — standard Gruvbox Dark palette
+# https://github.com/morhetz/gruvbox
+hower     = "#928374"
+text      = "#ebdbb2"
+surface2  = "#504945"
+surface1  = "#3c3836"
+surface0  = "#282828"
+overlay   = "#3c3836"
+border    = "#504945"
+base      = "#1d2021"
+Primary   = "#fabd2f"
+onPrimary = "#282828"
+
+## [Locale Settings]
+Locale=""
+HourFormat="hh:mm A"
+DateFormat = "ddd dd/MM/yy"
+SDDMTHEMECONF
+    echo "[*] Gruvbox SDDM theme.conf patched with standard gruvbox palette"
+  fi
+
+  # Set sddm-gruvbox as the active SDDM theme
+  if [ -f "$SDDM_GRUVBOX_DIR/metadata.desktop" ]; then
+    if grep -q "^\[Theme\]" "$SDDM_CONF" 2>/dev/null; then
+      if grep -q "^Current=" "$SDDM_CONF" 2>/dev/null; then
+        sed -i "s/^Current=.*/Current=sddm-gruvbox/" "$SDDM_CONF"
+      else
+        sed -i "/^\[Theme\]/a Current=sddm-gruvbox" "$SDDM_CONF"
+      fi
+    else
+      echo "" >> "$SDDM_CONF"
+      echo "[Theme]" >> "$SDDM_CONF"
+      echo "Current=sddm-gruvbox" >> "$SDDM_CONF"
+    fi
+    echo "[*] SDDM theme set to: sddm-gruvbox"
+  fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1337,6 +1559,8 @@ local config = wezterm.config_builder()
 config.color_scheme = 'GruvboxDarkHard'
 
 -- ── Window appearance ────────────────────────────────────────────────
+config.initial_cols = 120
+config.initial_rows = 32
 config.window_background_opacity = 0.85
 config.window_decorations = 'TITLE | RESIZE'
 config.window_padding = {
@@ -1604,6 +1828,495 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
+# PHASE 14: Gruvbox Theme (optional — enabled with --gruvbox)
+# ═══════════════════════════════════════════════════════════════════════
+if [ "$GRUVBOX" -eq 1 ]; then
+  echo ""
+  echo "══════════════════════════════════════════════════════════════"
+  echo "  Phase 14: Gruvbox Theme"
+  echo "══════════════════════════════════════════════════════════════"
+
+  # Detect target user (same logic as gruvbox-setup.sh)
+  GRUVBOX_USER=""
+  if [ -n "$AUTOLOGIN" ]; then
+    GRUVBOX_USER="$AUTOLOGIN"
+  else
+    for user_home in /home/*; do
+      username=$(basename "$user_home")
+      if id "$username" >/dev/null 2>&1; then
+        GRUVBOX_USER="$username"
+        break
+      fi
+    done
+  fi
+
+  if [ -z "$GRUVBOX_USER" ]; then
+    echo "[!] No user found for Gruvbox theme. Skipping."
+    GRUVBOX=0
+  else
+    G_USER_HOME=$(getent passwd "$GRUVBOX_USER" | cut -d: -f6)
+    echo "[*] Target user: $GRUVBOX_USER ($G_USER_HOME)"
+    echo "[*] Variant: $GRUVBOX_VARIANT"
+    echo "[*] Options: icons=$GRUVBOX_ICONS kvantum=$GRUVBOX_KVANTUM fastfetch=$GRUVBOX_FASTFETCH wallpaper=$GRUVBOX_WALLPAPER"
+
+    # ── 14.1: Color Scheme ──────────────────────────────────────────
+    echo ""
+    echo "=== Step 14.1: Gruvbox Color Scheme ==="
+    COLOR_SCHEMES_DIR="$G_USER_HOME/.local/share/color-schemes"
+    mkdir -p "$COLOR_SCHEMES_DIR"
+
+    DARK_URL="https://raw.githubusercontent.com/SylEleuth/gruvbox-plus-kde/master/color-scheme/GruvboxPlusDark.colors"
+    LIGHT_URL="https://raw.githubusercontent.com/SylEleuth/gruvbox-plus-kde/master/color-scheme/GruvboxPlusLight.colors"
+
+    curl -sL "$DARK_URL" -o "$COLOR_SCHEMES_DIR/GruvboxPlusDark.colors" 2>/dev/null && echo "[*] Downloaded GruvboxPlusDark.colors" || echo "[!] Failed to download dark color scheme"
+    curl -sL "$LIGHT_URL" -o "$COLOR_SCHEMES_DIR/GruvboxPlusLight.colors" 2>/dev/null && echo "[*] Downloaded GruvboxPlusLight.colors" || echo "[!] Failed to download light color scheme"
+    chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$COLOR_SCHEMES_DIR"
+
+    ACTIVE_SCHEME="GruvboxPlusDark"
+    [ "$GRUVBOX_VARIANT" = "light" ] && ACTIVE_SCHEME="GruvboxPlusLight"
+
+    # Write scheme name to kdeglobals (plasma-apply-colorscheme won't work
+    # before first login — colors apply on next login)
+    KDEGLOBALS="$G_USER_HOME/.config/kdeglobals"
+    mkdir -p "$G_USER_HOME/.config"
+    touch "$KDEGLOBALS"
+    if grep -q "^\[General\]" "$KDEGLOBALS" 2>/dev/null; then
+      if grep -q "^ColorScheme=" "$KDEGLOBALS" 2>/dev/null; then
+        sed -i "s/^ColorScheme=.*/ColorScheme=$ACTIVE_SCHEME/" "$KDEGLOBALS"
+      else
+        sed -i "/^\[General\]/a ColorScheme=$ACTIVE_SCHEME" "$KDEGLOBALS"
+      fi
+    else
+      echo "" >> "$KDEGLOBALS"
+      echo "[General]" >> "$KDEGLOBALS"
+      echo "ColorScheme=$ACTIVE_SCHEME" >> "$KDEGLOBALS"
+    fi
+    chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
+    echo "[*] Active color scheme: $ACTIVE_SCHEME"
+
+    # ── 14.2: Icon Pack ─────────────────────────────────────────────
+    if [ "$GRUVBOX_ICONS" -eq 1 ]; then
+      echo ""
+      echo "=== Step 14.2: Gruvbox Plus Icon Pack ==="
+      ICONS_DIR="$G_USER_HOME/.local/share/icons"
+      mkdir -p "$ICONS_DIR"
+
+      if ! command -v unzip >/dev/null 2>&1; then
+        echo "[*] Installing unzip..."
+        xinstall unzip
+      fi
+
+      echo "[*] Fetching latest Gruvbox Plus icon pack release..."
+      ICON_RELEASE_URL=$(curl -sL "https://api.github.com/repos/SylEleuth/gruvbox-plus-icon-pack/releases/latest" \
+        -H "Accept: application/json" 2>/dev/null | \
+        grep -o '"browser_download_url": *"[^"]*gruvbox-plus-icon-pack[^"]*\.zip"' | \
+        head -1 | sed 's/.*"browser_download_url": *"//;s/"//')
+
+      if [ -z "$ICON_RELEASE_URL" ]; then
+        echo "[!] Could not fetch icon pack release URL. Falling back to clone."
+        if [ -d "$G_USER_HOME/gruvbox-plus-icon-pack" ]; then
+          echo "[*] Icon pack repo already exists"
+        else
+          git clone --depth 1 "https://github.com/SylEleuth/gruvbox-plus-icon-pack.git" \
+            "$G_USER_HOME/gruvbox-plus-icon-pack" 2>/dev/null && echo "[*] Cloned icon pack repo" || { echo "[!] Failed to clone. Skipping icons."; GRUVBOX_ICONS=0; }
+        fi
+        if [ "$GRUVBOX_ICONS" -eq 1 ]; then
+          ICON_REPO="$G_USER_HOME/gruvbox-plus-icon-pack"
+          [ -d "$ICON_REPO/Gruvbox-Plus-Dark" ] && ln -sf "$ICON_REPO/Gruvbox-Plus-Dark" "$ICONS_DIR/Gruvbox-Plus-Dark"
+          [ -d "$ICON_REPO/Gruvbox-Plus-Light" ] && ln -sf "$ICON_REPO/Gruvbox-Plus-Light" "$ICONS_DIR/Gruvbox-Plus-Light"
+        fi
+      else
+        echo "[*] Downloading icon pack from: $ICON_RELEASE_URL"
+        ICON_ZIP="/tmp/gruvbox-plus-icons.zip"
+        if curl -sL "$ICON_RELEASE_URL" -o "$ICON_ZIP" 2>/dev/null; then
+          echo "[*] Downloaded icon pack ($(du -h "$ICON_ZIP" | cut -f1))"
+          unzip -q -o "$ICON_ZIP" -d "$ICONS_DIR/" 2>/dev/null
+          rm -f "$ICON_ZIP"
+          echo "[*] Icons extracted to $ICONS_DIR/"
+        else
+          echo "[!] Failed to download icon pack. Skipping icons."
+          GRUVBOX_ICONS=0
+        fi
+      fi
+
+      if [ "$GRUVBOX_ICONS" -eq 1 ]; then
+        ICON_THEME="Gruvbox-Plus-Dark"
+        [ "$GRUVBOX_VARIANT" = "light" ] && ICON_THEME="Gruvbox-Plus-Light"
+        KDEGLOBALS="$G_USER_HOME/.config/kdeglobals"
+        touch "$KDEGLOBALS"
+        if grep -q "^\[Icons\]" "$KDEGLOBALS" 2>/dev/null; then
+          awk -v icon_theme="$ICON_THEME" '
+            BEGIN { in_icons=0; icons_written=0 }
+            /^\[Icons\]/ {
+              if (icons_written==0) { in_icons=1; icons_written=1; print $0; print "Theme=" icon_theme }
+              else { in_icons=1 }
+              next
+            }
+            /^\[/ { in_icons=0 }
+            /^Theme=/ && in_icons==1 { next }
+            { if (in_icons==0 || icons_written==1) print $0 }
+          ' "$KDEGLOBALS" > "$KDEGLOBALS.tmp" && mv "$KDEGLOBALS.tmp" "$KDEGLOBALS"
+        else
+          echo "" >> "$KDEGLOBALS"
+          echo "[Icons]" >> "$KDEGLOBALS"
+          echo "Theme=$ICON_THEME" >> "$KDEGLOBALS"
+        fi
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$ICONS_DIR"
+        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
+        echo "[*] Active icon theme: $ICON_THEME"
+      fi
+    fi
+
+    # ── 14.3: Kvantum Theme ─────────────────────────────────────────
+    if [ "$GRUVBOX_KVANTUM" -eq 1 ]; then
+      echo ""
+      echo "=== Step 14.3: Kvantum Theme ==="
+      xinstall kvantum
+
+      KVANTUM_THEMES_DIR="$G_USER_HOME/.config/Kvantum"
+      mkdir -p "$KVANTUM_THEMES_DIR"
+      KVANTUM_THEME_DIR="$KVANTUM_THEMES_DIR/gruvbox-kvantum"
+      mkdir -p "$KVANTUM_THEME_DIR"
+
+      echo "[*] Downloading Gruvbox Kvantum theme..."
+      KV_CONFIG_URL="https://raw.githubusercontent.com/TheSerphh/Gruvbox-Kvantum/master/gruvbox-kvantum/gruvbox-kvantum.kvconfig"
+      KV_SVG_URL="https://raw.githubusercontent.com/TheSerphh/Gruvbox-Kvantum/master/gruvbox-kvantum/gruvbox-kvantum.svg"
+
+      if curl -sL "$KV_CONFIG_URL" -o "$KVANTUM_THEME_DIR/gruvbox-kvantum.kvconfig" 2>/dev/null; then
+        echo "[*] Downloaded gruvbox-kvantum.kvconfig"
+        curl -sL "$KV_SVG_URL" -o "$KVANTUM_THEME_DIR/gruvbox-kvantum.svg" 2>/dev/null && echo "[*] Downloaded gruvbox-kvantum.svg" || echo "[!] Failed to download SVG"
+      else
+        echo "[!] Failed to download kvantum config. Skipping kvantum."
+        GRUVBOX_KVANTUM=0
+      fi
+
+      if [ "$GRUVBOX_KVANTUM" -eq 1 ]; then
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$KVANTUM_THEMES_DIR"
+
+        ENV_FILE="$G_USER_HOME/.config/environment.d/gruvbox.conf"
+        mkdir -p "$G_USER_HOME/.config/environment.d"
+        cat > "$ENV_FILE" << 'ENVEOF'
+# Gruvbox theme — set Kvantum as the Qt style engine
+QT_QPA_PLATFORMTHEME=kvantum
+ENVEOF
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/environment.d"
+
+        KVANTUM_CONF="$G_USER_HOME/.config/Kvantum/kvantum.kvconfig"
+        if [ ! -f "$KVANTUM_CONF" ] || ! grep -q "^\[General\]" "$KVANTUM_CONF" 2>/dev/null; then
+          cat > "$KVANTUM_CONF" << 'KVCONFEOF'
+[General]
+theme=gruvbox-kvantum
+KVCONFEOF
+        else
+          if grep -q "^theme=" "$KVANTUM_CONF" 2>/dev/null; then
+            sed -i "s/^theme=.*/theme=gruvbox-kvantum/" "$KVANTUM_CONF"
+          else
+            sed -i "/^\[General\]/a theme=gruvbox-kvantum" "$KVANTUM_CONF"
+          fi
+        fi
+        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KVANTUM_CONF"
+        echo "[*] Kvantum theme 'gruvbox-kvantum' installed and configured"
+      fi
+    fi
+
+    # ── 14.4: Fastfetch ─────────────────────────────────────────────
+    if [ "$GRUVBOX_FASTFETCH" -eq 1 ]; then
+      echo ""
+      echo "=== Step 14.4: Fastfetch with Gruvbox Config ==="
+      xinstall fastfetch
+
+      FF_DIR="$G_USER_HOME/.config/fastfetch"
+      mkdir -p "$FF_DIR"
+
+      cat > "$FF_DIR/config.jsonc" << 'FFCONFIG'
+{
+    "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+    "logo": {
+        "source": "$HOME/.config/fastfetch/gruvbox-logo.txt",
+        "color": {
+            "1": "#ebdbb2"
+        }
+    },
+    "display": {
+        "color": {
+            "keys": "#83a598"
+        },
+        "separator": "",
+        "constants": [
+            "──────────────────────────────────────────────",
+            "\u001b[47D",
+            "\u001b[47C",
+            "\u001b[46C"
+        ],
+        "bar": {
+            "char": {
+                "elapsed": "⣿",
+                "total": "⢕"
+            },
+            "width": 20
+        },
+        "percent": {
+            "type": 2,
+            "color": {
+                "green": "#b8bb26",
+                "yellow": "#fabd2f",
+                "red": "#fb4934"
+            }
+        },
+        "temp": {
+            "color": {
+                "green": "#b8bb26",
+                "yellow": "#fabd2f",
+                "red": "#fb4934"
+            }
+        }
+    },
+    "modules": [
+        {
+            "type": "title",
+            "key": "╭─────────────────{$1}╮\u001b[60D",
+            "format": "\u001b[1m{#keys} FastFetch - [ {##ebdbb2}{2}{#keys} ] "
+        },
+        {
+            "type": "custom",
+            "key": "│{##ebdbb2}╭──────────────┬{$1}╮{#keys}│\u001b[30D",
+            "format": "{##ebdbb2} Machine "
+        },
+        {
+            "type": "cpu",
+            "key": "│{##ebdbb2}│ {icon}  CPU       │{$4}│{#keys}│{$2}",
+            "showPeCoreCount": true,
+            "temp": true,
+            "format": "{##ebdbb2}[ {##83a598}{1}{##ebdbb2} ] ~ {##ebdbb2}{8}{##ebdbb2}"
+        },
+        {
+            "type": "gpu",
+            "key": "│{##ebdbb2}│ {icon}  GPU       │{$4}│{#keys}│{$2}",
+            "temp": true,
+            "format": "{##ebdbb2}[ {##fb4934}{2}{##ebdbb2} ] ~ {##ebdbb2}{4}{##ebdbb2}"
+        },
+        {
+            "type": "memory",
+            "key": "│{##ebdbb2}│ {icon}  Memory    │{$4}│{#keys}│{$2}",
+            "format": "{4} {##ebdbb2}[ {##ebdbb2}{1}{##ebdbb2} ]"
+        },
+        {
+            "type": "swap",
+            "key": "│{##ebdbb2}│ {icon}  Swap      │{$4}│{#keys}│{$2}",
+            "format": "{4} {##ebdbb2}[ {##ebdbb2}{1}{##ebdbb2} ]"
+        },
+        {
+            "type": "disk",
+            "key": "│{##ebdbb2}│ {icon}  Disk      │{$4}│{#keys}│{$2}",
+            "format": "{13} {##ebdbb2}[ {##ebdbb2}{1}{##ebdbb2} ]"
+        },
+        {
+            "type": "disk",
+            "key": "│{##ebdbb2}│ {icon}  Type      │{$4}│{#keys}│{$2}",
+            "format": "{##ebdbb2}{9}"
+        },
+        {
+            "type": "custom",
+            "key": "│{##ebdbb2}╰──────────────┴{$1}╯{#keys}│",
+            "format": ""
+        },
+        {
+            "type": "custom",
+            "key": "│{##83a598}╭──────────────┬{$1}╮{#keys}│\u001b[30D",
+            "format": "{##83a598} System "
+        },
+        {
+            "type": "os",
+            "key": "│{##83a598}│ {icon}  OS        │{$4}│{#keys}│{$2}",
+            "format": "{##83a598}{2} ~> [ {##ebdbb2}{3}{##83a598} ]"
+        },
+        {
+            "type": "kernel",
+            "keyIcon": "󰣇",
+            "key": "│{##83a598}│ {icon}  Kernel    │{$4}│{#keys}│{$2}",
+            "format": "{##83a598}{2} ~> [ {##ebdbb2}{4}{##83a598} ]"
+        },
+        {
+            "type": "de",
+            "key": "│{##458588}│ {icon}  Desktop   │{$4}│{#keys}│{$2}",
+            "format": "{##458588}{2} ~> [ {##ebdbb2}{3}{##458588} ]"
+        },
+        {
+            "type": "wm",
+            "key": "│{##458588}│ {icon}  WM        │{$4}│{#keys}│{$2}",
+            "format": "{##458588}{2} ~> [ {##ebdbb2}{3}{##458588} ]"
+        },
+        {
+            "type": "uptime",
+            "keyIcon": "󰅐",
+            "key": "│{##458588}│ {icon}  Uptime    │{$4}│{#keys}│{$2}",
+            "format": "{##458588}[ {##ebdbb2}{1}d {2}h {3}m{##458588} ]"
+        },
+        {
+            "type": "custom",
+            "key": "│{##458588}╰──────────────┴{$1}╯{#keys}│",
+            "format": ""
+        },
+        {
+            "type": "custom",
+            "key": "│{##fabd2f}╭──────────────┬{$1}╮{#keys}│\u001b[30D",
+            "format": "{##fabd2f} Shell "
+        },
+        {
+            "type": "shell",
+            "key": "│{##fabd2f}│ {icon}  Shell     │{$4}│{#keys}│{$2}",
+            "format": "{##fabd2f}{6} ~> [ {##ebdbb2}{4}{##fabd2f} ]"
+        },
+        {
+            "type": "terminal",
+            "key": "│{##d79921}│ {icon}  Terminal  │{$4}│{#keys}│{$2}",
+            "format": "{##d79921}{5} ~> [ {##ebdbb2}{6}{##d79921} ]"
+        },
+        {
+            "type": "packages",
+            "key": "│{##fe8019}│ {icon}  Packages  │{$4}│{#keys}│{$2}",
+            "format": "{##fe8019}xbps ~> [ {##ebdbb2}{2}{##fe8019} ]"
+        },
+        {
+            "type": "custom",
+            "key": "│{##d65d0e}╰──────────────┴{$1}╯{#keys}│",
+            "format": ""
+        },
+        {
+            "type": "custom",
+            "key": "│{##fb4934}╭──────────────┬{$1}╮{#keys}│\u001b[30D",
+            "format": "{##fb4934} Dev "
+        },
+        {
+            "type": "command",
+            "keyIcon": "󰅭",
+            "key": "│{##fb4934}│ {icon}  Editor    │{$4}│{#keys}│{$2}",
+            "text": "command -v micro >/dev/null 2>&1 && micro --version 2>/dev/null | head -1 || echo 'none'",
+            "format": "{##fb4934}micro ~> [ {##ebdbb2}{}{##fb4934} ]"
+        },
+        {
+            "type": "command",
+            "keyIcon": "󰊢",
+            "key": "│{##cc241d}│ {icon}  Git       │{$4}│{#keys}│{$2}",
+            "text": "git --version 2>/dev/null | cut -d' ' -f3 || echo 'none'",
+            "format": "{##cc241d}git ~> [ {##ebdbb2}{}{##cc241d} ]"
+        },
+        {
+            "type": "custom",
+            "key": "│{##cc241d}╰──────────────┴{$1}╯{#keys}│",
+            "format": ""
+        },
+        {
+            "type": "custom",
+            "key": "│{##8ec07c}╭──────────────┬{$1}╮{#keys}│\u001b[30D",
+            "format": "{##8ec07c} Status "
+        },
+        {
+            "type": "datetime",
+            "keyIcon": "󰥔",
+            "key": "│{##8ec07c}│ {icon}  Fetched   │{$4}│{#keys}│{$2}",
+            "format": "{##8ec07c}[ {##ebdbb2}{hour-pretty} : {minute-pretty} : {second-pretty}{##8ec07c} ]"
+        },
+        {
+            "type": "custom",
+            "key": "│{##427b58}╰──────────────┴{$1}╯{#keys}│",
+            "format": ""
+        },
+        {
+            "type": "custom",
+            "key": "╰─────────────────{$1}╯",
+            "format": ""
+        }
+    ]
+}
+FFCONFIG
+
+      cat > "$FF_DIR/gruvbox-logo.txt" << 'LOGOEOF'
+    .--.
+   |o_o |   Void Linux
+   |:_/ |
+  //   \ \
+ (|     | )
+/'\_   _/`\
+\___)=(___/
+LOGOEOF
+
+      chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$FF_DIR"
+
+      BASHRC="$G_USER_HOME/.bashrc"
+      if [ -f "$BASHRC" ]; then
+        if ! grep -q "fastfetch" "$BASHRC" 2>/dev/null; then
+          echo "" >> "$BASHRC"
+          echo "# Gruvbox fastfetch on terminal open" >> "$BASHRC"
+          echo "if command -v fastfetch >/dev/null 2>&1 && [ -t 1 ]; then" >> "$BASHRC"
+          echo "    fastfetch" >> "$BASHRC"
+          echo "fi" >> "$BASHRC"
+          chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$BASHRC"
+          echo "[*] Added fastfetch to .bashrc"
+        else
+          echo "[*] fastfetch already in .bashrc"
+        fi
+      else
+        cat > "$BASHRC" << 'BASHRCEOF'
+# Gruvbox fastfetch on terminal open
+if command -v fastfetch >/dev/null 2>&1 && [ -t 1 ]; then
+    fastfetch
+fi
+BASHRCEOF
+        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$BASHRC"
+        echo "[*] Created .bashrc with fastfetch"
+      fi
+      echo "[*] Fastfetch installed with gruvbox config"
+    fi
+
+    # ── 14.5: Wallpaper ─────────────────────────────────────────────
+    if [ "$GRUVBOX_WALLPAPER" -eq 1 ]; then
+      echo ""
+      echo "=== Step 14.5: Wallpaper ==="
+      WP_DIR="$G_USER_HOME/Pictures/wallpapers"
+      mkdir -p "$WP_DIR"
+      WP_FILE=""
+
+      if [ -n "$GRUVBOX_WALLPAPER_PATH" ] && [ -f "$GRUVBOX_WALLPAPER_PATH" ]; then
+        WP_FILE="$WP_DIR/$(basename "$GRUVBOX_WALLPAPER_PATH")"
+        echo "[*] Copying wallpaper to $WP_FILE..."
+        cp "$GRUVBOX_WALLPAPER_PATH" "$WP_FILE"
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR"
+        echo "[*] Wallpaper copied ($(du -h "$WP_FILE" | cut -f1))"
+      elif [ -n "$GRUVBOX_WALLPAPER_PATH" ] && [ ! -f "$GRUVBOX_WALLPAPER_PATH" ]; then
+        echo "[!] Wallpaper file not found: $GRUVBOX_WALLPAPER_PATH"
+        GRUVBOX_WALLPAPER=0
+      elif [ -n "$GRUVBOX_WALLPAPER_URL" ]; then
+        WP_FILE="$WP_DIR/$GRUVBOX_WALLPAPER_FILENAME"
+        echo "[*] Downloading wallpaper from $GRUVBOX_WALLPAPER_URL..."
+        if curl -sL "$GRUVBOX_WALLPAPER_URL" -o "$WP_FILE" 2>/dev/null && [ -s "$WP_FILE" ]; then
+          chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR"
+          echo "[*] Wallpaper downloaded ($(du -h "$WP_FILE" | cut -f1))"
+        else
+          echo "[!] Failed to download wallpaper. Skipping."
+          rm -f "$WP_FILE"
+          GRUVBOX_WALLPAPER=0
+        fi
+      else
+        GRUVBOX_WALLPAPER=0
+      fi
+
+      if [ "$GRUVBOX_WALLPAPER" -eq 1 ] && [ -n "$WP_FILE" ] && [ -f "$WP_FILE" ]; then
+        # Wallpaper will be applied after first login via plasma-apply-wallpaperimage
+        # Can't apply live during install (no Plasma session yet)
+        echo "[*] Wallpaper saved to $WP_FILE"
+        echo "[*] Will appear after first login — or apply manually via"
+        echo "    System Settings > Wallpaper > Add Image"
+      fi
+    fi
+
+    echo ""
+    echo "[*] Gruvbox theme setup complete."
+    echo "[*] All theme components will be active after first login."
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════
 echo ""
@@ -1624,6 +2337,7 @@ echo ""
 echo "  Enabled services (start on boot):"
 echo "    - dbus           (/var/service/dbus)"
 echo "    - elogind        (/var/service/elogind)  — session/seat mgmt"
+echo "    - zramen         (/var/service/zramen)   — zram compressed swap (lz4, 25% RAM)"
 echo "    - sddm           (/var/service/sddm)      — display manager"
 echo "    - NetworkManager (/var/service/NetworkManager)"
 [ $BLUETOOTH_DETECTED -eq 1 ] && echo "    - bluetoothd      (/var/service/bluetoothd)"
@@ -1669,6 +2383,18 @@ echo "    cleanup    — sudo xbps-remove -O -o"
 echo ""
 echo "  Bash history: 10000 entries, dedup, timestamped, saved per-command"
 echo ""
+
+if [ "$GRUVBOX" -eq 1 ]; then
+  echo "  Gruvbox theme installed (--gruvbox):"
+  echo "    [✓] Color scheme: GruvboxPlus${GRUVBOX_VARIANT^}"
+  [ "$GRUVBOX_ICONS" -eq 1 ] && echo "    [✓] Icons: Gruvbox-Plus-${GRUVBOX_VARIANT^}"
+  [ "$GRUVBOX_KVANTUM" -eq 1 ] && echo "    [✓] Kvantum: gruvbox-kvantum (Qt5/Qt6)"
+  [ "$GRUVBOX_FASTFETCH" -eq 1 ] && echo "    [✓] Fastfetch: gruvbox config"
+  [ "$GRUVBOX_WALLPAPER" -eq 1 ] && echo "    [✓] Wallpaper: ${GRUVBOX_WALLPAPER_FILENAME}"
+  echo "    [✓] SDDM theme: sddm-gruvbox (Qt6, he1senbrg/sddm-gruvbox)"
+  echo "    Theme will be active after first login."
+  echo ""
+fi
 
 if [ "$REBOOT" -eq 1 ]; then
   echo "[*] Rebooting in 5 seconds (Ctrl+C to cancel)..."
