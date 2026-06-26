@@ -142,6 +142,28 @@ xinstall() {
   return 0
 }
 
+# dl_file — download a URL to a file using curl, falling back to wget.
+# Usage: dl_file <url> <output_path>
+# Returns 0 on success, 1 on failure.
+dl_file() {
+  local url="$1"
+  local dest="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    if curl -sL "$url" -o "$dest" 2>/dev/null && [ -s "$dest" ]; then
+      return 0
+    fi
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    if wget -q "$url" -O "$dest" 2>/dev/null && [ -s "$dest" ]; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 # ═══════════════════════════════════════════════════════════════════════
 # HARDWARE DISCOVERY
 # ═══════════════════════════════════════════════════════════════════════
@@ -313,6 +335,15 @@ xbps-install -Syu || {
 # Re-sync after upgrade
 echo "=== Step 2.3: Re-syncing package index ==="
 xbps-install -Sy || true
+
+# ── Install curl and wget early ──────────────────────────────────────
+# These are needed by Phase 10 (SDDM theme download) and Phase 14 (Gruvbox
+# theme downloads). A fresh Void base install does NOT include curl by
+# default, so if we wait until Phase 12 (CLI tools) to install it, the
+# SDDM theme download in Phase 10b silently fails and SDDM keeps breeze.
+echo ""
+echo "=== Step 2.4: Installing curl and wget (needed for theme downloads) ==="
+xinstall curl wget
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 3: Firmware and microcode (hardware-specific)
@@ -1105,8 +1136,7 @@ if [ "$GRUVBOX" -eq 1 ]; then
     echo "[*] Gruvbox SDDM theme already installed."
   else
     echo "[*] Downloading sddm-gruvbox v1.1.0..."
-    if curl -sL "https://github.com/he1senbrg/sddm-gruvbox/releases/download/v1.1.0/sddm-gruvbox.zip" \
-      -o "$SDDM_GRUVBOX_ZIP" 2>/dev/null && [ -s "$SDDM_GRUVBOX_ZIP" ]; then
+    if dl_file "https://github.com/he1senbrg/sddm-gruvbox/releases/download/v1.1.0/sddm-gruvbox.zip" "$SDDM_GRUVBOX_ZIP"; then
       echo "[*] Downloaded sddm-gruvbox.zip ($(du -h "$SDDM_GRUVBOX_ZIP" | cut -f1))"
 
       # Extract and install
@@ -1120,9 +1150,12 @@ if [ "$GRUVBOX" -eq 1 ]; then
         echo "[*] Gruvbox SDDM theme installed to $SDDM_GRUVBOX_DIR"
       else
         echo "[!] Failed to install Gruvbox SDDM theme — files missing after extract."
+        echo "[!] SDDM will fall back to breeze theme."
       fi
     else
-      echo "[!] Failed to download sddm-gruvbox.zip. SDDM will use default theme."
+      echo "[!] Failed to download sddm-gruvbox.zip (both curl and wget failed)."
+      echo "[!] SDDM will fall back to breeze theme."
+      echo "[!] Manual install: download from https://github.com/he1senbrg/sddm-gruvbox/releases"
     fi
   fi
 
@@ -1202,7 +1235,8 @@ echo "════════════════════════�
 # ── Install CLI packages ────────────────────────────────────────────
 echo ""
 echo "=== Step 12.1: Installing CLI tools ==="
-xinstall bat micro nano eza git wget curl bash-completion wezterm wezterm-terminfo desktop-file-utils
+xinstall bat micro nano eza git bash-completion wezterm wezterm-terminfo desktop-file-utils
+# Note: curl and wget are installed earlier (Phase 2.4) for theme downloads
 
 # ── Install Nerd Fonts + base fonts ──────────────────────────────────
 # nerd-fonts-symbols-ttf (5MB) provides the icon glyphs that eza --icons
@@ -1897,8 +1931,8 @@ if [ "$GRUVBOX" -eq 1 ]; then
     DARK_URL="https://raw.githubusercontent.com/SylEleuth/gruvbox-plus-kde/master/color-scheme/GruvboxPlusDark.colors"
     LIGHT_URL="https://raw.githubusercontent.com/SylEleuth/gruvbox-plus-kde/master/color-scheme/GruvboxPlusLight.colors"
 
-    curl -sL "$DARK_URL" -o "$COLOR_SCHEMES_DIR/GruvboxPlusDark.colors" 2>/dev/null && echo "[*] Downloaded GruvboxPlusDark.colors" || echo "[!] Failed to download dark color scheme"
-    curl -sL "$LIGHT_URL" -o "$COLOR_SCHEMES_DIR/GruvboxPlusLight.colors" 2>/dev/null && echo "[*] Downloaded GruvboxPlusLight.colors" || echo "[!] Failed to download light color scheme"
+    dl_file "$DARK_URL" "$COLOR_SCHEMES_DIR/GruvboxPlusDark.colors" && echo "[*] Downloaded GruvboxPlusDark.colors" || echo "[!] Failed to download dark color scheme"
+    dl_file "$LIGHT_URL" "$COLOR_SCHEMES_DIR/GruvboxPlusLight.colors" && echo "[*] Downloaded GruvboxPlusLight.colors" || echo "[!] Failed to download light color scheme"
     chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$COLOR_SCHEMES_DIR"
 
     ACTIVE_SCHEME="GruvboxPlusDark"
@@ -1957,7 +1991,7 @@ if [ "$GRUVBOX" -eq 1 ]; then
       else
         echo "[*] Downloading icon pack from: $ICON_RELEASE_URL"
         ICON_ZIP="/tmp/gruvbox-plus-icons.zip"
-        if curl -sL "$ICON_RELEASE_URL" -o "$ICON_ZIP" 2>/dev/null; then
+        if dl_file "$ICON_RELEASE_URL" "$ICON_ZIP"; then
           echo "[*] Downloaded icon pack ($(du -h "$ICON_ZIP" | cut -f1))"
           unzip -q -o "$ICON_ZIP" -d "$ICONS_DIR/" 2>/dev/null
           rm -f "$ICON_ZIP"
@@ -2011,9 +2045,9 @@ if [ "$GRUVBOX" -eq 1 ]; then
       KV_CONFIG_URL="https://raw.githubusercontent.com/TheSerphh/Gruvbox-Kvantum/master/gruvbox-kvantum/gruvbox-kvantum.kvconfig"
       KV_SVG_URL="https://raw.githubusercontent.com/TheSerphh/Gruvbox-Kvantum/master/gruvbox-kvantum/gruvbox-kvantum.svg"
 
-      if curl -sL "$KV_CONFIG_URL" -o "$KVANTUM_THEME_DIR/gruvbox-kvantum.kvconfig" 2>/dev/null; then
+      if dl_file "$KV_CONFIG_URL" "$KVANTUM_THEME_DIR/gruvbox-kvantum.kvconfig"; then
         echo "[*] Downloaded gruvbox-kvantum.kvconfig"
-        curl -sL "$KV_SVG_URL" -o "$KVANTUM_THEME_DIR/gruvbox-kvantum.svg" 2>/dev/null && echo "[*] Downloaded gruvbox-kvantum.svg" || echo "[!] Failed to download SVG"
+        dl_file "$KV_SVG_URL" "$KVANTUM_THEME_DIR/gruvbox-kvantum.svg" && echo "[*] Downloaded gruvbox-kvantum.svg" || echo "[!] Failed to download SVG"
       else
         echo "[!] Failed to download kvantum config. Skipping kvantum."
         GRUVBOX_KVANTUM=0
@@ -2318,7 +2352,7 @@ BASHRCEOF
       elif [ -n "$GRUVBOX_WALLPAPER_URL" ]; then
         WP_FILE="$WP_DIR/$GRUVBOX_WALLPAPER_FILENAME"
         echo "[*] Downloading wallpaper from $GRUVBOX_WALLPAPER_URL..."
-        if curl -sL "$GRUVBOX_WALLPAPER_URL" -o "$WP_FILE" 2>/dev/null && [ -s "$WP_FILE" ]; then
+        if dl_file "$GRUVBOX_WALLPAPER_URL" "$WP_FILE"; then
           chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR"
           echo "[*] Wallpaper downloaded ($(du -h "$WP_FILE" | cut -f1))"
         else
