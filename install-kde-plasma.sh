@@ -596,9 +596,17 @@ exec 2>&1
 sv check dbus >/dev/null || exit 1
 
 cgroup=/sys/fs/cgroup/elogind
-mkdir -p "$cgroup"
+mkdir -p "$cgroup" 2>/dev/null || true
 if ! mountpoint "$cgroup" > /dev/null; then
-  mount -t cgroup -o none,name=elogind cgroup "$cgroup" || exit 1
+  # Try cgroup v2 first (unified hierarchy, modern kernels)
+  if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+    # cgroup v2 — elogind uses the unified hierarchy, no named mount needed
+    # Just ensure the directory exists (created above)
+    :
+  else
+    # cgroup v1 — mount named hierarchy
+    mount -t cgroup -o none,name=elogind cgroup "$cgroup" || exit 1
+  fi
 fi
 
 for tmpfs in /run/systemd /run/user; do
@@ -607,28 +615,31 @@ for tmpfs in /run/systemd /run/user; do
   mount -t tmpfs -o nosuid,nodev,noexec,mode=0755 none "$tmpfs" || exit 1
 done
 
-# Start elogind in background, then wait for it.
+# Start elogind and keep the run script alive while it runs.
 # elogind forks by default — the parent exits immediately, which makes
-# runit think the service crashed. We start it in the background and
-# then wait on the daemon PID file so runit sees a long-running process.
+# runit think the service crashed. We use a polling loop instead of wait()
+# because wait() only works on direct child processes, and the forked
+# daemon is reparented to init (not a child of this shell).
 /usr/libexec/elogind/elogind &
-EPID=$!
-
-# Give elogind a moment to fork and write its state
 sleep 2
-
-# Find the actual daemon process (the forked child)
-DPID=$(pgrep -x elogind 2>/dev/null | head -1)
-if [ -n "$DPID" ] && [ "$DPID" != "$EPID" ]; then
-  # Parent already exited, wait on the child
-  wait "$DPID" 2>/dev/null || wait "$EPID" 2>/dev/null
-else
-  wait "$EPID" 2>/dev/null
-fi
+# Poll: keep the run script alive as long as elogind is running
+while pgrep -x elogind >/dev/null 2>&1; do
+  sleep 5
+done
 ELOGINDRUN
   chmod 755 /etc/sv/elogind/run
   echo "[*] Patched elogind run script (inline wrapper + wait loop)"
 fi
+
+# Enable dbus BEFORE elogind — elogind's run script checks sv check dbus
+if [ -L /var/service/dbus ]; then
+  echo "[*] dbus already enabled."
+else
+  ln -s /etc/sv/dbus /var/service/
+  echo "[*] dbus symlink created."
+fi
+sleep 1
+sv status dbus 2>/dev/null || sv up dbus 2>/dev/null || true
 
 if [ -L /var/service/elogind ]; then
   echo "[*] elogind already enabled."
@@ -646,6 +657,15 @@ echo "=== Step 4.2: Installing kde-plasma, kde-baseapps, sddm, and core deps ===
 # xdg-utils provides xdg-open, xdg-mime (URL/file handling in KDE)
 # konsole is KDE's default terminal — needed as fallback even with wezterm
 xinstall kde-plasma kde-baseapps sddm dbus polkit-elogind xdg-utils konsole
+
+# Enable polkitd service — needed for GUI privilege escalation
+# (mounting USB drives, shutdown/reboot from KDE menu, PackageKit updates)
+if [ -d /etc/sv/polkitd ] && [ ! -L /var/service/polkitd ]; then
+  ln -s /etc/sv/polkitd /var/service/
+  echo "[*] polkitd symlink created."
+elif [ -L /var/service/polkitd ]; then
+  echo "[*] polkitd already enabled."
+fi
 
 # ── Archive tools (Dolphin extract/compress integration) ─────────────
 # ark: KDE archiver — provides Dolphin right-click "Extract" and
@@ -826,7 +846,8 @@ if [ $AUDIO_DETECTED -eq 1 ]; then
   elif [ -d /etc/sv/rtkit ]; then
     ln -s /etc/sv/rtkit /var/service/
     echo "[*] rtkit symlink created."
-  else
+    sv up rtkit 2>/dev/null || true
+    else
     echo "[*] No rtkit service dir found — may not be needed."
   fi
 
@@ -1082,16 +1103,24 @@ case "$VIRT_PLATFORM" in
   vmware)
     echo "[*] VMware VM detected. Installing open-vm-tools."
     xinstall open-vm-tools
-    if [ -d /etc/sv/vmblockd ] && [ ! -L /var/service/vmblockd ]; then
-      ln -s /etc/sv/vmblockd /var/service/
-      echo "[*] vmblockd symlink created."
-    elif [ -L /var/service/vmblockd ]; then
-      echo "[*] vmblockd already enabled."
-    fi
+    for vm_svc in vmblockd vmtoolsd; do
+      if [ -d /etc/sv/$vm_svc ] && [ ! -L /var/service/$vm_svc ]; then
+        ln -s /etc/sv/$vm_svc /var/service/
+        echo "[*] $vm_svc symlink created."
+      elif [ -L /var/service/$vm_svc ]; then
+        echo "[*] $vm_svc already enabled."
+      fi
+    done
     ;;
   virtualbox)
     echo "[*] VirtualBox VM detected. Installing virtualbox-guest-tools."
     xinstall virtualbox-guest-tools
+    if [ -d /etc/sv/vboxservice ] && [ ! -L /var/service/vboxservice ]; then
+      ln -s /etc/sv/vboxservice /var/service/
+      echo "[*] vboxservice symlink created."
+    elif [ -L /var/service/vboxservice ]; then
+      echo "[*] vboxservice already enabled."
+    fi
     ;;
   hyperv)
     echo "[*] Hyper-V VM detected. No additional guest tools package needed."
@@ -1113,19 +1142,6 @@ echo "════════════════════════�
 echo "  Phase 10: Services and Display Manager"
 echo "══════════════════════════════════════════════════════════════"
 
-# ── dbus ─────────────────────────────────────────────────────────────
-echo ""
-echo "=== Step 10.1: Enabling dbus service ==="
-if [ -L /var/service/dbus ]; then
-  echo "[*] dbus already enabled."
-else
-  ln -s /etc/sv/dbus /var/service/
-  echo "[*] dbus symlink created."
-fi
-# Give runit a moment to scan the new symlink before sv commands
-sleep 2
-sv status dbus 2>/dev/null || sv up dbus 2>/dev/null || true
-
 # ── zramen (zram swap) ───────────────────────────────────────────────
 echo ""
 echo "=== Step 10.1b: Enabling zramen (zram swap) ==="
@@ -1146,7 +1162,11 @@ fi
 ZRAMEN_CONF="/etc/sv/zramen/conf"
 if [ -f "$ZRAMEN_CONF" ]; then
   sed -i 's/^#export ZRAM_COMP_ALGORITHM=lz4/export ZRAM_COMP_ALGORITHM=lz4/' "$ZRAMEN_CONF"
-  echo "[*] zramen: enabled lz4 compression"
+  if grep -q '^export ZRAM_COMP_ALGORITHM=lz4' "$ZRAMEN_CONF" 2>/dev/null; then
+    echo "[*] zramen: enabled lz4 compression"
+  else
+    echo "[!] zramen: could not enable lz4 via sed — config format may differ"
+  fi
 fi
 
 # Give runit a moment to pick it up
@@ -1252,7 +1272,7 @@ Session="
   # support), wayland for everything else (Plasma 6 default).
   SDDM_DISPLAY_SERVER="wayland"
   SDDM_GREETER_ENV="QT_WAYLAND_SHELL_INTEGRATION=layer-shell"
-  if [ "$GPU_VENDOR" = "qxl" ] || [ "$GPU_VENDOR" = "virtio" ] && [ "$VIRT_PLATFORM" != "none" ]; then
+  if { [ "$GPU_VENDOR" = "qxl" ] || [ "$GPU_VENDOR" = "virtio" ]; } && [ "$VIRT_PLATFORM" != "none" ]; then
     SDDM_DISPLAY_SERVER="x11"
     SDDM_GREETER_ENV=""
     echo "[*] QXL/virtio GPU in VM detected — SDDM will use X11 greeter (no Wayland/Vulkan support)"
@@ -1917,23 +1937,6 @@ if [ "$WAYLAND" -eq 1 ]; then
   echo "    After login, select 'Plasma (Wayland)' from the SDDM session dropdown."
   echo "    No additional package is needed — Plasma Wayland support is included in kde-plasma."
 fi
-
-# ── Fix ownership of user config directories ──────────────────────────
-# The script runs as root and creates dirs like ~/.config, ~/.config/wezterm
-# with root ownership. Plasma can't write settings to root-owned dirs,
-# causing the theme/color-scheme Apply button to silently fail.
-# Fix: chown all user config dirs back to their rightful owners.
-echo ""
-echo "[*] Fixing user directory ownership..."
-for user_home in /home/*; do
-  owner=$(stat -c %U "$user_home" 2>/dev/null)
-  if [ -n "$owner" ] && [ "$owner" != "root" ]; then
-    chown -R "$owner":"$owner" "$user_home/.config" 2>/dev/null && \
-      echo "[*] Fixed .config ownership for $owner"
-    chown -R "$owner":"$owner" "$user_home/.local" 2>/dev/null && \
-      echo "[*] Fixed .local ownership for $owner"
-  fi
-done
 
 # ── Apply Breeze Dark theme ──────────────────────────────────────────
 # Pre-configure the Breeze Dark color scheme and look-and-feel so the
@@ -2632,6 +2635,25 @@ WPDESKTOP
     echo "[*] All theme components will be active after first login."
   fi
 fi
+
+# ── Final ownership fix (runs AFTER all file creation/modification) ──
+# The script runs as root and creates dirs/files in user homes throughout
+# all phases. sed -i re-creates files as root-owned. This pass runs at the
+# very end to catch everything: .config, .local, Pictures, and any other
+# directories created by the script.
+echo ""
+echo "[*] Final ownership fix..."
+for user_home in /home/*; do
+  owner=$(stat -c %U "$user_home" 2>/dev/null)
+  if [ -n "$owner" ] && [ "$owner" != "root" ]; then
+    chown -R "$owner":"$owner" "$user_home/.config" 2>/dev/null
+    chown -R "$owner":"$owner" "$user_home/.local" 2>/dev/null
+    chown -R "$owner":"$owner" "$user_home/Pictures" 2>/dev/null
+    # Clean up icon pack clone if it exists (fallback from Phase 14)
+    [ -d "$user_home/gruvbox-plus-icon-pack" ] && chown -R "$owner":"$owner" "$user_home/gruvbox-plus-icon-pack" 2>/dev/null
+    echo "[*] Fixed ownership for $owner: .config .local Pictures"
+  fi
+done
 
 # ═══════════════════════════════════════════════════════════════════════
 # Summary
