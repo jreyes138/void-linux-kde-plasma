@@ -979,10 +979,19 @@ else
   ln -s /etc/sv/zramen /var/service/
   echo "[*] zramen symlink created."
 fi
+
+# Enable lz4 compression — faster than default lzo-rle for both
+# compression and decompression with similar ratios.
+ZRAMEN_CONF="/etc/sv/zramen/conf"
+if [ -f "$ZRAMEN_CONF" ]; then
+  sed -i 's/^#export ZRAM_COMP_ALGORITHM=lz4/export ZRAM_COMP_ALGORITHM=lz4/' "$ZRAMEN_CONF"
+  echo "[*] zramen: enabled lz4 compression"
+fi
+
 # Give runit a moment to pick it up
 sleep 1
 sv status zramen 2>/dev/null || true
-echo "[*] zramen service enabled — zram swap will start on boot."
+echo "[*] zramen service enabled — zram swap (lz4, 25% RAM) will start on boot."
 
 # ── SDDM test then enable ─────────────────────────────────────────────
 echo ""
