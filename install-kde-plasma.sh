@@ -1915,6 +1915,8 @@ for user_home in /home/*; do
   if [ -n "$owner" ] && [ "$owner" != "root" ]; then
     chown -R "$owner":"$owner" "$user_home/.config" 2>/dev/null && \
       echo "[*] Fixed .config ownership for $owner"
+    chown -R "$owner":"$owner" "$user_home/.local" 2>/dev/null && \
+      echo "[*] Fixed .local ownership for $owner"
   fi
 done
 
@@ -2564,44 +2566,49 @@ BASHRCEOF
       fi
 
       if [ "$GRUVBOX_WALLPAPER" -eq 1 ] && [ -n "$WP_FILE" ] && [ -f "$WP_FILE" ]; then
-        # Write wallpaper into Plasma desktop config so it applies on first login.
-        # plasma-org.kde.plasma.desktop-appletsrc stores the wallpaper image path
-        # under [Containments][1][Wallpaper][org.kde.image][General][Image].
-        APPLET_SRC="$G_USER_HOME/.config/plasma-org.kde.plasma.desktop-appletsrc"
-        mkdir -p "$G_USER_HOME/.config"
+        # Apply wallpaper via plasma-apply-wallpaperimage on first login.
+        # We can't call it now (no Plasma session), and writing to
+        # plasma-org.kde.plasma.desktop-appletsrc doesn't work because
+        # Plasma overwrites it on login. Instead, create an autostart
+        # script that applies the wallpaper on first login, then removes
+        # itself so it only runs once.
+        AUTOSTART_DIR="$G_USER_HOME/.config/autostart"
+        mkdir -p "$AUTOSTART_DIR"
 
-        # If the file exists and already has an Image= key, replace it.
-        # If it exists but has no Image= key, add one under the image wallpaper config.
-        # If it doesn't exist, create a minimal config with the wallpaper set.
-        if [ -f "$APPLET_SRC" ]; then
-          if grep -q "^Image=" "$APPLET_SRC" 2>/dev/null; then
-            sed -i "s|^Image=.*|Image=file://$WP_FILE|" "$APPLET_SRC"
-          else
-            # Append wallpaper config section
-            echo "" >> "$APPLET_SRC"
-            echo "[Containments][1][Wallpaper][org.kde.image][General]" >> "$APPLET_SRC"
-            echo "Image=file://$WP_FILE" >> "$APPLET_SRC"
-          fi
-        else
-          # Create minimal appletsrc with desktop containment + wallpaper
-          cat > "$APPLET_SRC" << WPAPPLET
-[Containments][1]
-activityId=
-formfactor=0
-immutability=1
-lastScreen=0
-location=0
-plugin=org.kde.plasma.folder
-wallpaperplugin=org.kde.image
+        # Create the apply script
+        WP_APPLY_SCRIPT="$G_USER_HOME/.local/bin/apply-gruvbox-wallpaper.sh"
+        mkdir -p "$G_USER_HOME/.local/bin"
+        cat > "$WP_APPLY_SCRIPT" << 'WPAPPLY'
+#!/bin/bash
+# Apply gruvbox wallpaper on first login, then remove this autostart entry.
+WP_FILE="WP_FILE_PLACEHOLDER"
+if [ -f "$WP_FILE" ]; then
+  plasma-apply-wallpaperimage "$WP_FILE" 2>/dev/null
+fi
+# Remove the autostart desktop file and this script
+rm -f "$HOME/.config/autostart/apply-gruvbox-wallpaper.desktop"
+rm -f "$0"
+WPAPPLY
+        sed -i "s|WP_FILE_PLACEHOLDER|$WP_FILE|" "$WP_APPLY_SCRIPT"
+        chmod 755 "$WP_APPLY_SCRIPT"
 
-[Containments][1][Wallpaper][org.kde.image][General]
-Image=file://$WP_FILE
-WPAPPLET
-        fi
-        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$APPLET_SRC"
+        # Create autostart desktop file
+        cat > "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop" << 'WPDESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Apply Gruvbox Wallpaper
+Exec=WP_SCRIPT_PLACEHOLDER
+Icon=preferences-desktop-wallpaper
+Terminal=false
+X-KDE-autostart-phase=2
+OnlyShowIn=KDE
+WPDESKTOP
+        sed -i "s|WP_SCRIPT_PLACEHOLDER|$WP_APPLY_SCRIPT|" "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop"
+
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/autostart" "$G_USER_HOME/.local/bin"
 
         echo "[*] Wallpaper saved to $WP_FILE"
-        echo "[*] Wallpaper set in Plasma config — will apply on first login"
+        echo "[*] Wallpaper will be applied on first login via autostart script"
       fi
     fi
 
