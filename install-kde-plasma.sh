@@ -1389,6 +1389,9 @@ xinstall bat micro nano eza git bash-completion desktop-file-utils
 # which has the latest API (matches Lenier's laptop version).
 echo ""
 echo "=== Step 12.1b: Installing wezterm nightly ==="
+# xz and tar are needed to extract the .tar.xz archive.
+# A fresh Void base may not have xz installed yet.
+xinstall xz tar
 WEZTERM_NIGHTLY_TAR="/tmp/wezterm-nightly.tar.xz"
 WEZTERM_NIGHTLY_URL="https://github.com/wezterm/wezterm/releases/download/nightly/wezterm-nightly.Ubuntu22.04.tar.xz"
 if dl_file "$WEZTERM_NIGHTLY_URL" "$WEZTERM_NIGHTLY_TAR"; then
