@@ -171,6 +171,11 @@ else
   PART2="${DISK}2"
 fi
 
+# Install gptfdisk (sgdisk) if not present — the Void live image
+# does not include it by default. parted is also not guaranteed.
+echo "[*] Ensuring partitioning tools are available..."
+xbps-install -Sy gptfdisk 2>/dev/null || true
+
 # Create partitions with sgdisk (from gptfdisk) or parted fallback
 if command -v sgdisk >/dev/null 2>&1; then
   if [ "$IS_UEFI" -eq 1 ]; then
@@ -185,7 +190,13 @@ if command -v sgdisk >/dev/null 2>&1; then
     sgdisk -n 2:0:0 -t 2:8300 -c 2:"Linux root" "$DISK"
   fi
 else
-  echo "[*] sgdisk not found, using parted..."
+  echo "[*] sgdisk not found, trying parted..."
+  xbps-install -Sy parted 2>/dev/null || true
+  if ! command -v parted >/dev/null 2>&1; then
+    echo "ERROR: Neither sgdisk nor parted available. Cannot partition."
+    echo "       Install manually: xbps-install gptfdisk"
+    exit 1
+  fi
   if [ "$IS_UEFI" -eq 1 ]; then
     parted -s "$DISK" mklabel gpt
     parted -s "$DISK" mkpart ESP fat32 1MiB 513MiB
