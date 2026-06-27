@@ -612,20 +612,61 @@ if [ "$IS_UEFI" -eq 1 ]; then
   mountpoint -q /sys/firmware/efi/efivars 2>/dev/null || \
     mount -t efivarfs none /sys/firmware/efi/efivars 2>/dev/null || true
 
-  grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void" \
-    || grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram
-  echo "[*] GRUB installed (UEFI)."
-  # Verify GRUB EFI binary exists
-  if [ ! -f /boot/efi/EFI/Void/grubx64.efi ]; then
-    echo "[!] WARNING: /boot/efi/EFI/Void/grubx64.efi not found!"
-    echo "[!] grub-install may have failed. Trying fallback path..."
-    mkdir -p /boot/efi/EFI/BOOT
-    if [ -f /boot/efi/EFI/Void/grubx64.efi ]; then
-      cp /boot/efi/EFI/Void/grubx64.efi /boot/efi/EFI/BOOT/bootx64.efi
-    fi
+  # For btrfs root, GRUB needs btrfs module in the core image to read
+  # the filesystem and find /boot/grub/grub.cfg and the kernel.
+  # Use --modules to explicitly embed btrfs + part_gpt + fat (for ESP).
+  # Use --removable to install to /boot/efi/EFI/BOOT/bootx64.efi (the
+  # standard fallback path all UEFI firmware checks). This is more
+  # reliable than relying on NVRAM boot entries, especially in VMs
+  # (OVMF/edk2) where NVRAM may not persist.
+  if [ "$FS" = "btrfs" ]; then
+    GRUB_MODULES="btrfs part_gpt fat ext2"
+  else
+    GRUB_MODULES=""
   fi
+
+  echo "[*] Installing GRUB to ESP with --removable (fallback boot path)..."
+  grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+    --bootloader-id="Void" --removable \
+    ${GRUB_MODULES:+--modules="$GRUB_MODULES"} \
+    2>&1 || {
+    echo "[!] grub-install --removable failed, trying without --removable..."
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+      --bootloader-id="Void" \
+      ${GRUB_MODULES:+--modules="$GRUB_MODULES"} \
+      2>&1 || {
+      echo "[!] grub-install failed again, trying with --no-nvram..."
+      grub-install --target=x86_64-efi --efi-directory=/boot/efi \
+        --bootloader-id="Void" --no-nvram \
+        ${GRUB_MODULES:+--modules="$GRUB_MODULES"} 2>&1 || true
+    }
+  }
+
+  # Verify GRUB EFI binary exists at both paths
+  echo "[*] Checking GRUB EFI binary locations:"
+  for efi in /boot/efi/EFI/BOOT/bootx64.efi /boot/efi/EFI/Void/grubx64.efi; do
+    if [ -f "$efi" ]; then
+      echo "[*] Found: $efi ($(stat -c %s "$efi" 2>/dev/null || echo '?') bytes)"
+    else
+      echo "[!] Missing: $efi"
+    fi
+  done
+
+  # Ensure fallback path always exists
+  mkdir -p /boot/efi/EFI/BOOT
+  if [ ! -f /boot/efi/EFI/BOOT/bootx64.efi ] && [ -f /boot/efi/EFI/Void/grubx64.efi ]; then
+    cp /boot/efi/EFI/Void/grubx64.efi /boot/efi/EFI/BOOT/bootx64.efi
+    echo "[*] Copied grubx64.efi to fallback BOOT path"
+  fi
+
+  echo "[*] GRUB installed (UEFI)."
 else
-  grub-install "$DISK"
+  # BIOS: grub-install embeds core image into the BIOS boot partition
+  if [ "$FS" = "btrfs" ]; then
+    grub-install --modules="btrfs part_gpt" "$DISK"
+  else
+    grub-install "$DISK"
+  fi
   echo "[*] GRUB installed (BIOS)."
 fi
 
