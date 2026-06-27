@@ -76,19 +76,34 @@ if ! command -v xbps-install >/dev/null 2>&1; then
   exit 1
 fi
 
+# ── interactive: disk selection ──────────────────────────────────────
 if [ -z "$DISK" ]; then
-  echo "ERROR: --disk is required (e.g. --disk /dev/sda or --disk /dev/nvme0n1)"
-  exit 1
-fi
-
-if [ -z "$HOSTNAME" ]; then
-  echo "ERROR: --hostname is required (e.g. --hostname voidbox)"
-  exit 1
+  echo ""
+  echo "Available disks:"
+  lsblk -d -o NAME,SIZE,TYPE,MODEL 2>/dev/null || lsblk -d 2>/dev/null || true
+  echo ""
+  echo -n "Enter target disk (e.g. /dev/sda or /dev/nvme0n1): "
+  read -r DISK
+  if [ -z "$DISK" ]; then
+    echo "ERROR: No disk specified."
+    exit 1
+  fi
 fi
 
 if [ ! -b "$DISK" ]; then
   echo "ERROR: $DISK is not a block device."
   exit 1
+fi
+
+# ── interactive: hostname ─────────────────────────────────────────────
+if [ -z "$HOSTNAME" ]; then
+  echo ""
+  echo -n "Enter system hostname (e.g. voidbox): "
+  read -r HOSTNAME
+  if [ -z "$HOSTNAME" ]; then
+    echo "ERROR: No hostname specified."
+    exit 1
+  fi
 fi
 
 # Check disk is not mounted
@@ -128,11 +143,9 @@ if [ -d /sys/firmware/efi ]; then
 fi
 
 # ── confirmation prompt ─────────────────────────────────────────────
+echo ""
 echo "[*] Void Linux base installer (chroot/XBPS method)"
 echo "[*] Options: disk=$DISK hostname=$HOSTNAME fs=$FS kernel=$KERNEL uefi=$IS_UEFI arch=$ARCH nonfree=$NONFREE user=${USERNAME:-none} reboot=$REBOOT"
-echo "[*] Logging to ${LOG}"
-exec > >(tee -a "$LOG") 2>&1
-echo "[*] Started: $(date)"
 
 if [ "$YES" -eq 0 ]; then
   echo ""
@@ -148,6 +161,56 @@ if [ "$YES" -eq 0 ]; then
     exit 1
   fi
 fi
+
+# ── interactive: root password ──────────────────────────────────────
+# Collect passwords BEFORE log redirect so they don't end up in the log.
+ROOT_PASSWORD=""
+if [ "$PASSWORD_STDIN" -eq 1 ]; then
+  echo "[*] Reading root password from stdin..."
+  read -r ROOT_PASSWORD
+elif [ "$YES" -eq 0 ]; then
+  echo ""
+  echo "── Root password ──"
+  echo "Set a root password for the new system."
+  passwd_hashed=""
+  while true; do
+    read -r -s -p "Root password: " ROOT_PASSWORD
+    echo ""
+    read -r -s -p "Confirm root password: " ROOT_PASSWORD2
+    echo ""
+    if [ "$ROOT_PASSWORD" = "$ROOT_PASSWORD2" ] && [ -n "$ROOT_PASSWORD" ]; then
+      break
+    fi
+    echo "Passwords do not match or are empty. Try again."
+  done
+fi
+
+# ── interactive: user creation ───────────────────────────────────────
+USER_PASSWORD=""
+if [ -z "$USERNAME" ] && [ "$YES" -eq 0 ]; then
+  echo ""
+  echo "── User account ──"
+  echo "Create a user account? This user will have sudo (wheel) access."
+  echo -n "Username (leave empty to skip): "
+  read -r USERNAME
+  if [ -n "$USERNAME" ]; then
+    while true; do
+      read -r -s -p "Password for $USERNAME: " USER_PASSWORD
+      echo ""
+      read -r -s -p "Confirm password for $USERNAME: " USER_PASSWORD2
+      echo ""
+      if [ "$USER_PASSWORD" = "$USER_PASSWORD2" ] && [ -n "$USER_PASSWORD" ]; then
+        break
+      fi
+      echo "Passwords do not match or are empty. Try again."
+    done
+  fi
+fi
+
+# ── start logging (AFTER password collection) ────────────────────────
+echo "[*] Logging to ${LOG}"
+exec > >(tee -a "$LOG") 2>&1
+echo "[*] Started: $(date)"
 
 # ═══════════════════════════════════════════════════════════════════════
 # PHASE 1: Partitioning
@@ -323,18 +386,11 @@ fi
 echo "[*] fstab contents:"
 cat /mnt/etc/fstab
 
-# Read password from stdin if requested (before entering chroot)
-ROOT_PASSWORD=""
-if [ "$PASSWORD_STDIN" -eq 1 ]; then
-  echo "[*] Reading root password from stdin..."
-  read -r ROOT_PASSWORD
-fi
-
 # Enter chroot — use xchroot if available, otherwise manual
 echo "[*] Entering chroot..."
 
 # Export variables for use inside the chroot heredoc
-export DISK PART1 PART2 FS IS_UEFI KERNEL NONFREE USERNAME HOSTNAME ROOT_PASSWORD REPO ARCH
+export DISK PART1 PART2 FS IS_UEFI KERNEL NONFREE USERNAME HOSTNAME ROOT_PASSWORD USER_PASSWORD REPO ARCH
 
 # Prepare chroot environment
 if command -v xchroot >/dev/null 2>&1; then
@@ -373,18 +429,21 @@ fi
 # ── Root password ─────────────────────────────────────────────────
 if [ -n "$ROOT_PASSWORD" ]; then
   echo "root:$ROOT_PASSWORD" | chpasswd
-  echo "[*] Root password set from stdin."
+  echo "[*] Root password set."
 else
-  echo "[*] Setting root password (interactive)..."
-  passwd
+  echo "[!] No root password set. Use --password-stdin or run passwd root after reboot."
 fi
 
 # ── User account ──────────────────────────────────────────────────
 if [ -n "$USERNAME" ]; then
   echo "[*] Creating user: $USERNAME"
   useradd -m -G wheel,audio,video,input,network,bluetooth "$USERNAME"
-  echo "[*] Setting password for $USERNAME (interactive)..."
-  passwd "$USERNAME"
+  if [ -n "$USER_PASSWORD" ]; then
+    echo "$USERNAME:$USER_PASSWORD" | chpasswd
+    echo "[*] Password set for $USERNAME."
+  else
+    echo "[!] No password set for $USERNAME. Run passwd $USERNAME after reboot."
+  fi
   echo "[*] User $USERNAME created with wheel + audio + video + input + network + bluetooth groups."
 fi
 
