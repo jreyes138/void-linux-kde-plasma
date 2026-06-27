@@ -420,13 +420,18 @@ XBPS_ARCH=$ARCH xbps-install -y -r /mnt -R "$REPO" $EXTRA_PKGS || true
 # inside the chroot can't find any repositories.
 echo "[*] Configuring XBPS repositories inside /mnt..."
 mkdir -p /mnt/usr/share/xbps.d
-# Copy any xbps.d configs from the host
+# Copy ALL xbps.d configs from the host (repo configs, mirror configs, etc.)
 if [ -d /usr/share/xbps.d ]; then
-  cp /usr/share/xbps.d/*-main.conf /mnt/usr/share/xbps.d/ 2>/dev/null || true
+  cp /usr/share/xbps.d/*.conf /mnt/usr/share/xbps.d/ 2>/dev/null || true
 fi
 # If no configs were copied, create one from the REPO variable
-if ! ls /mnt/usr/share/xbps.d/*main*.conf >/dev/null 2>&1; then
+if ! ls /mnt/usr/share/xbps.d/*.conf >/dev/null 2>&1; then
   echo "repository=$REPO" > /mnt/usr/share/xbps.d/00-main.conf
+fi
+# Also copy any user overrides from /etc/xbps.d
+if [ -d /etc/xbps.d ]; then
+  mkdir -p /mnt/etc/xbps.d
+  cp /etc/xbps.d/*.conf /mnt/etc/xbps.d/ 2>/dev/null || true
 fi
 # Sync the package database inside the chroot target
 XBPS_ARCH=$ARCH xbps-install -S -r /mnt -R "$REPO" 2>/dev/null || true
@@ -565,13 +570,21 @@ if [ -n "$USERNAME" ]; then
   echo "[*] User $USERNAME created with wheel + audio + video + input + network + bluetooth groups."
 fi
 
-# ── GRUB configuration (BEFORE grub-install) ───────────────────────
-# GRUB_PRELOAD_MODULES and GRUB_CMDLINE_LINUX_DEFAULT must be set
-# BEFORE grub-install, because grub-install reads /etc/default/grub
-# to determine which modules to embed in the core image.
-# If btrfs module is missing from the core image, GRUB can't read
-# the btrfs filesystem to find /boot/grub/grub.cfg and the kernel.
+# ── Install GRUB package ───────────────────────────────────────────
 echo ""
+echo "[*] Installing GRUB package..."
+if [ "$IS_UEFI" -eq 1 ]; then
+  echo "[*] UEFI system — installing grub-x86_64-efi..."
+  xbps-install -Sy grub-x86_64-efi || true
+else
+  echo "[*] BIOS system — installing grub..."
+  xbps-install -Sy grub || true
+fi
+
+# ── GRUB configuration (AFTER grub package, BEFORE grub-install) ───
+# /etc/default/grub is created by the grub package install.
+# We modify it BEFORE grub-install so the core image is built with
+# the correct modules (btrfs) and kernel cmdline (rootflags=subvol=@).
 echo "[*] Configuring GRUB..."
 if [ "$FS" = "btrfs" ]; then
   echo "[*] Configuring GRUB for btrfs subvol=@..."
@@ -590,12 +603,9 @@ if [ "$FS" = "btrfs" ]; then
   fi
 fi
 
-# ── GRUB bootloader install ───────────────────────────────────────
-echo "[*] Installing GRUB bootloader..."
+# ── Run grub-install ──────────────────────────────────────────────
+echo "[*] Running grub-install..."
 if [ "$IS_UEFI" -eq 1 ]; then
-  echo "[*] UEFI system — installing grub-x86_64-efi..."
-  xbps-install -Sy grub-x86_64-efi || true
-
   # Mount efivarfs if not mounted (needed for grub-install)
   mountpoint -q /sys/firmware/efi/efivars 2>/dev/null || \
     mount -t efivarfs none /sys/firmware/efi/efivars 2>/dev/null || true
@@ -603,11 +613,25 @@ if [ "$IS_UEFI" -eq 1 ]; then
   grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void" \
     || grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram
   echo "[*] GRUB installed (UEFI)."
+  # Verify GRUB EFI binary exists
+  if [ ! -f /boot/efi/EFI/Void/grubx64.efi ]; then
+    echo "[!] WARNING: /boot/efi/EFI/Void/grubx64.efi not found!"
+    echo "[!] grub-install may have failed. Trying fallback path..."
+    mkdir -p /boot/efi/EFI/BOOT
+    if [ -f /boot/efi/EFI/Void/grubx64.efi ]; then
+      cp /boot/efi/EFI/Void/grubx64.efi /boot/efi/EFI/BOOT/bootx64.efi
+    fi
+  fi
 else
-  echo "[*] BIOS system — installing grub..."
-  xbps-install -Sy grub || true
   grub-install "$DISK"
   echo "[*] GRUB installed (BIOS)."
+fi
+
+# Verify /etc/default/grub has the btrfs settings
+if [ "$FS" = "btrfs" ]; then
+  echo "[*] GRUB config verification:"
+  grep -E 'GRUB_PRELOAD_MODULES|GRUB_CMDLINE_LINUX_DEFAULT' /etc/default/grub 2>/dev/null || \
+    echo "[!] WARNING: GRUB config missing btrfs settings!"
 fi
 
 # ── Kernel selection ──────────────────────────────────────────────
@@ -672,6 +696,41 @@ fi
 echo ""
 echo "[*] Installed kernels:"
 xbps-query -l 2>/dev/null | grep -E '^ii linux' || true
+
+# CRITICAL: Check that at least one kernel with a vmlinuz is present
+KERNEL_FOUND=0
+for kdir in /boot/vmlinuz-*; do
+  if [ -f "$kdir" ]; then
+    KERNEL_FOUND=1
+    echo "[*] Found kernel: $(basename "$kdir")"
+    break
+  fi
+done
+if [ "$KERNEL_FOUND" -eq 0 ]; then
+  echo "[!] WARNING: No kernel found in /boot/ System may not boot!"
+  echo "[!] Check: xbps-query -l | grep linux"
+fi
+
+# CRITICAL: Check that initramfs was generated
+INITRAMFS_FOUND=0
+for ifile in /boot/initramfs-*.img; do
+  if [ -f "$ifile" ]; then
+    INITRAMFS_FOUND=1
+    echo "[*] Found initramfs: $(basename "$ifile")"
+    break
+  fi
+done
+if [ "$INITRAMFS_FOUND" -eq 0 ]; then
+  echo "[!] WARNING: No initramfs found in /boot/ System may not boot!"
+  echo "[!] Try: xbps-reconfigure -f linux-mainline"
+fi
+
+# CRITICAL: Check that grub.cfg was generated
+if [ ! -f /boot/grub/grub.cfg ]; then
+  echo "[!] WARNING: /boot/grub/grub.cfg not found!"
+  echo "[!] Running grub-mkconfig manually..."
+  grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
+fi
 
 echo ""
 echo "[*] Chroot configuration complete."
