@@ -24,6 +24,8 @@
 #   --password-stdin       Read root password from stdin (for scripting)
 #   --repo URL             XBPS repository URL (default: https://repo-default.voidlinux.org/current)
 #   --arch x86_64          Target architecture (default: auto-detect)
+#   --uefi                  Force UEFI mode (auto-detect may fail if live image booted in BIOS mode)
+#   --bios                  Force BIOS mode
 #   --yes                  Skip confirmation prompt (for automation)
 
 # Re-exec with bash if not already running under bash
@@ -47,6 +49,8 @@ ARCH=""
 YES=0
 KEYMAP=""
 LOCALE=""
+FORCE_UEFI=0
+FORCE_BIOS=0
 LOG=/var/log/void-base-install.log
 
 # ── parse args ──────────────────────────────────────────────────────
@@ -61,9 +65,11 @@ while [ $# -gt 0 ]; do
     --no-reboot)     REBOOT=0; shift ;;
     --kernel)        shift; KERNEL="${1:-}"; shift ;;
     --user)          shift; USERNAME="${1:-}"; shift ;;
-    --password-stdin) PASSWORD_STDIN=1; shift ;;
+    --password-stdin) PASSWORD_STDIN=1 shift ;;
     --repo)          shift; REPO="${1:-}"; shift ;;
     --arch)          shift; ARCH="${1:-}"; shift ;;
+    --uefi)          FORCE_UEFI=1; shift ;;
+    --bios)          FORCE_BIOS=1; shift ;;
     --yes)           YES=1; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -142,10 +148,22 @@ if [ -z "$ARCH" ]; then
   esac
 fi
 
-# Auto-detect UEFI vs BIOS
+# Auto-detect UEFI vs BIOS, or use forced mode
 IS_UEFI=0
-if [ -d /sys/firmware/efi ]; then
+if [ "$FORCE_UEFI" -eq 1 ]; then
   IS_UEFI=1
+  echo "[*] UEFI mode forced (--uefi)"
+elif [ "$FORCE_BIOS" -eq 1 ]; then
+  IS_UEFI=0
+  echo "[*] BIOS mode forced (--bios)"
+elif [ -d /sys/firmware/efi ]; then
+  IS_UEFI=1
+  echo "[*] UEFI mode detected (/sys/firmware/efi exists)"
+else
+  IS_UEFI=0
+  echo "[*] BIOS mode detected (/sys/firmware/efi not found)"
+  echo "[*] If installing to a UEFI VM, make sure the live image booted in UEFI mode"
+  echo "[*] or use --uefi flag to force UEFI install"
 fi
 
 # ── confirmation prompt ─────────────────────────────────────────────
