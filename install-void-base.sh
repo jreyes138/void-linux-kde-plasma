@@ -33,7 +33,7 @@ if [ -z "$BASH_VERSION" ]; then
   exec bash "$0" "$@"
 fi
 
-set -euo pipefail
+set -e
 
 # ── defaults ────────────────────────────────────────────────────────
 DISK=""
@@ -566,7 +566,7 @@ fi
 echo "[*] Entering chroot for system configuration..."
 
 $CHROOT_CMD << 'CHROOT_EOF'
-set -e
+# No set -e — we want to see all errors, not abort on first failure
 
 echo "[*] Inside chroot — configuring system..."
 
@@ -641,7 +641,7 @@ else
   echo "[*] GRUB configured (ext4, no subvolume flags)"
 fi
 
-# Run grub-install using chroot (needs /dev, /proc, /sys which are already bound)
+# Run grub-install using chroot
 echo "[*] Running grub-install..."
 
 # Verify ESP is mounted at /mnt/boot/efi
@@ -653,68 +653,26 @@ if [ "$IS_UEFI" -eq 1 ]; then
   fi
 fi
 
-GRUB_INSTALL_SUCCESS=0
+# Simple grub-install — match the Medium article approach exactly
+# No fancy fallback chains that can break under set -e
 if [ "$IS_UEFI" -eq 1 ]; then
-  if [ "$FS" = "btrfs" ]; then
-    GRUB_MODS="--modules=btrfs,part_gpt,fat,ext2"
-  else
-    GRUB_MODS=""
-  fi
-
-  echo "[*] Installing GRUB (UEFI, --removable)..."
+  echo "[*] Installing GRUB (UEFI)..."
   chroot /mnt grub-install --target=x86_64-efi \
-    --efi-directory=/boot/efi --bootloader-id="Void" \
-    --removable $GRUB_MODS 2>&1 && GRUB_INSTALL_SUCCESS=1 || {
-    echo "[!] --removable failed, trying standard..."
+    --efi-directory=/boot/efi --bootloader-id="Void" 2>&1 || {
+    echo "[!] grub-install failed, trying --removable..."
     chroot /mnt grub-install --target=x86_64-efi \
-      --efi-directory=/boot/efi --bootloader-id="Void" $GRUB_MODS 2>&1 && GRUB_INSTALL_SUCCESS=1 || {
-      echo "[!] standard failed, trying --no-nvram..."
-      chroot /mnt grub-install --target=x86_64-efi \
-        --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram $GRUB_MODS 2>&1 && GRUB_INSTALL_SUCCESS=1 || true
-    }
+      --efi-directory=/boot/efi --bootloader-id="Void" --removable 2>&1 || true
   }
 
-  # If all grub-install methods failed, manually copy the EFI binary
-  if [ "$GRUB_INSTALL_SUCCESS" -eq 0 ]; then
-    echo "[!] All grub-install methods failed. Manual EFI binary copy..."
-    # The grub EFI binary may already exist in the package
-    GRUB_EFI_SRC=$(find /mnt/usr/lib/grub -name "grubx64.efi" 2>/dev/null | head -1)
-    if [ -z "$GRUB_EFI_SRC" ]; then
-      GRUB_EFI_SRC="/mnt/usr/lib/grub/x86_64-efi/grubx64.efi"
-    fi
-    if [ -f "$GRUB_EFI_SRC" ]; then
-      echo "[*] Found GRUB EFI binary at $GRUB_EFI_SRC"
-      mkdir -p /mnt/boot/efi/EFI/BOOT
-      cp "$GRUB_EFI_SRC" /mnt/boot/efi/EFI/BOOT/bootx64.efi
-      echo "[*] Copied to /mnt/boot/efi/EFI/BOOT/bootx64.efi"
-      GRUB_INSTALL_SUCCESS=1
-    else
-      echo "[!] No grubx64.efi found in /mnt/usr/lib/grub/"
-      echo "[!] GRUB package may not have installed correctly"
-    fi
-  fi
-
-  # Verify EFI binary
-  echo "[*] Checking GRUB EFI binary locations:"
-  for efi in /mnt/boot/efi/EFI/BOOT/bootx64.efi /mnt/boot/efi/EFI/Void/grubx64.efi; do
-    if [ -f "$efi" ]; then
-      echo "[*] Found: $efi ($(stat -c %s "$efi" 2>/dev/null || echo '?') bytes)"
-    else
-      echo "[!] Missing: $efi"
-    fi
-  done
+  # Ensure fallback BOOT path exists (for VMs where NVRAM doesn't persist)
   mkdir -p /mnt/boot/efi/EFI/BOOT
-  if [ ! -f /mnt/boot/efi/EFI/BOOT/bootx64.efi ] && [ -f /mnt/boot/efi/EFI/Void/grubx64.efi ]; then
+  if [ -f /mnt/boot/efi/EFI/Void/grubx64.efi ]; then
     cp /mnt/boot/efi/EFI/Void/grubx64.efi /mnt/boot/efi/EFI/BOOT/bootx64.efi
     echo "[*] Copied grubx64.efi to fallback BOOT path"
   fi
 else
   echo "[*] Installing GRUB (BIOS)..."
-  if [ "$FS" = "btrfs" ]; then
-    chroot /mnt grub-install --modules="btrfs part_gpt" "$DISK" 2>&1 || true
-  else
-    chroot /mnt grub-install "$DISK" 2>&1 || true
-  fi
+  chroot /mnt grub-install "$DISK" 2>&1 || true
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -724,7 +682,7 @@ echo ""
 echo "[*] Entering chroot for kernel + services + initramfs..."
 
 $CHROOT_CMD << 'CHROOT_EOF'
-set -e
+# No set -e — we want to see all errors, not abort on first failure
 
 # ── Kernel ignorepkg config ───────────────────────────────────────
 if [ "$KERNEL" = "mainline" ]; then
