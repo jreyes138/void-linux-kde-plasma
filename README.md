@@ -87,6 +87,8 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 | `--disk /dev/sdX` | Target disk (required, e.g. /dev/sda or /dev/nvme0n1) |
 | `--hostname NAME` | System hostname (required) |
 | `--fs btrfs` | Filesystem: btrfs (default) or ext4 |
+| `--keymap us` | Console keyboard layout (default: us) |
+| `--locale en_US.UTF-8` | System locale (default: en_US.UTF-8, glibc only) |
 | `--kernel mainline` | Kernel: mainline (default) or stock |
 | `--user NAME` | Create user account with wheel + sudo |
 | `--password-stdin` | Read root password from stdin (for scripting) |

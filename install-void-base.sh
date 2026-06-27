@@ -15,6 +15,8 @@
 #   --disk /dev/sdX        Target disk (required)
 #   --hostname NAME        System hostname (required)
 #   --fs btrfs             Filesystem: btrfs (default) or ext4
+#   --keymap us            Console keyboard layout (default: us)
+#   --locale en_US.UTF-8   System locale (default: en_US.UTF-8, glibc only)
 #   --no-nonfree           Skip nonfree/multilib repo enablement
 #   --no-reboot            Don't reboot at the end
 #   --kernel mainline      Kernel: mainline (default) or stock
@@ -43,6 +45,8 @@ PASSWORD_STDIN=0
 REPO="https://repo-default.voidlinux.org/current"
 ARCH=""
 YES=0
+KEYMAP=""
+LOCALE=""
 LOG=/var/log/void-base-install.log
 
 # ── parse args ──────────────────────────────────────────────────────
@@ -51,6 +55,8 @@ while [ $# -gt 0 ]; do
     --disk)          shift; DISK="${1:-}"; shift ;;
     --hostname)      shift; HOSTNAME="${1:-}"; shift ;;
     --fs)            shift; FS="${1:-}"; shift ;;
+    --keymap)        shift; KEYMAP="${1:-}"; shift ;;
+    --locale)        shift; LOCALE="${1:-}"; shift ;;
     --no-nonfree)    NONFREE=0; shift ;;
     --no-reboot)     REBOOT=0; shift ;;
     --kernel)        shift; KERNEL="${1:-}"; shift ;;
@@ -204,6 +210,46 @@ if [ -z "$USERNAME" ] && [ "$YES" -eq 0 ]; then
       fi
       echo "Passwords do not match or are empty. Try again."
     done
+  fi
+fi
+
+# ── interactive: keyboard layout ──────────────────────────────────────
+# Void uses keymaps from /usr/share/kbd/keymaps. Common ones:
+#   us (default), gb, de, fr, es, it, br, ru, etc.
+# Full list: ls /usr/share/kbd/keymaps/*/ | sed 's/.map.gz//'
+# If --keymap was passed via flag, use it. Otherwise default to us.
+# Prompt interactively unless --yes.
+if [ -z "$KEYMAP" ]; then
+  KEYMAP="us"
+fi
+if [ "$YES" -eq 0 ]; then
+  echo ""
+  echo "── Keyboard layout ──"
+  echo "Common layouts: us, gb, de, fr, es, it, br, ru, dvorak, colemak"
+  echo -n "Keyboard layout [$KEYMAP]: "
+  read -r INPUT_KEYMAP
+  if [ -n "$INPUT_KEYMAP" ]; then
+    KEYMAP="$INPUT_KEYMAP"
+  fi
+fi
+
+# ── interactive: locale ───────────────────────────────────────────────
+# Format: language_COUNTRY.UTF-8 (glibc only, musl doesn't use locales)
+# Common: en_US.UTF-8 (default), en_GB.UTF-8, de_DE.UTF-8, es_ES.UTF-8,
+#         fr_FR.UTF-8, pt_BR.UTF-8, it_IT.UTF-8, etc.
+# If --locale was passed via flag, use it. Otherwise default to en_US.UTF-8.
+# Prompt interactively unless --yes or musl.
+if [ -z "$LOCALE" ]; then
+  LOCALE="en_US.UTF-8"
+fi
+if [ "$YES" -eq 0 ] && [ ! -d /usr/lib/musl ]; then
+  echo ""
+  echo "── Locale ──"
+  echo "Format: language_COUNTRY.UTF-8 (e.g. en_US.UTF-8, es_ES.UTF-8)"
+  echo -n "Locale [$LOCALE]: "
+  read -r INPUT_LOCALE
+  if [ -n "$INPUT_LOCALE" ]; then
+    LOCALE="$INPUT_LOCALE"
   fi
 fi
 
@@ -390,7 +436,7 @@ cat /mnt/etc/fstab
 echo "[*] Entering chroot..."
 
 # Export variables for use inside the chroot heredoc
-export DISK PART1 PART2 FS IS_UEFI KERNEL NONFREE USERNAME HOSTNAME ROOT_PASSWORD USER_PASSWORD REPO ARCH
+export DISK PART1 PART2 FS IS_UEFI KERNEL NONFREE USERNAME HOSTNAME ROOT_PASSWORD USER_PASSWORD KEYMAP LOCALE REPO ARCH
 
 # Prepare chroot environment
 if command -v xchroot >/dev/null 2>&1; then
@@ -416,14 +462,26 @@ echo "$HOSTNAME" > /etc/hostname
 sed -i "s|^HOSTNAME=.*|HOSTNAME=$HOSTNAME|" /etc/rc.conf 2>/dev/null || true
 echo "[*] Hostname set to: $HOSTNAME"
 
+# ── Keyboard layout ───────────────────────────────────────────────
+# Set console keymap in rc.conf — applied at boot by runit
+sed -i "s|^KEYMAP=.*|KEYMAP=$KEYMAP|" /etc/rc.conf 2>/dev/null || \
+  echo "KEYMAP=$KEYMAP" >> /etc/rc.conf
+# Apply immediately for this session
+loadkeys "$KEYMAP" 2>/dev/null || true
+echo "[*] Keyboard layout set to: $KEYMAP"
+
 # ── Locale (glibc only) ───────────────────────────────────────────
 if [ ! -d /usr/lib/musl ]; then
-  echo "LANG=en_US.UTF-8" > /etc/locale.conf
-  if ! grep -q 'en_US.UTF-8' /etc/default/libc-locales 2>/dev/null; then
-    echo "en_US.UTF-8 UTF-8" >> /etc/default/libc-locales
+  echo "LANG=$LOCALE" > /etc/locale.conf
+  if ! grep -q "^$LOCALE" /etc/default/libc-locales 2>/dev/null; then
+    echo "$LOCALE UTF-8" >> /etc/default/libc-locales
   fi
   xbps-reconfigure -f glibc-locales 2>/dev/null || true
-  echo "[*] Locale set to: en_US.UTF-8"
+  echo "[*] Locale set to: $LOCALE"
+else
+  # musl — no locale system, just set LANG for basic UTF-8
+  echo "LANG=$LOCALE" > /etc/locale.conf 2>/dev/null || true
+  echo "[*] Locale set to: $LOCALE (musl — limited locale support)"
 fi
 
 # ── Root password ─────────────────────────────────────────────────
@@ -565,6 +623,8 @@ echo "════════════════════════�
 echo ""
 echo "  Disk:          $DISK"
 echo "  Hostname:      $HOSTNAME"
+echo "  Keyboard:      $KEYMAP"
+echo "  Locale:        $LOCALE"
 echo "  Filesystem:    $FS"
 if [ "$FS" = "btrfs" ]; then
   echo "  Subvolumes:    @ (root) + @home (/home)"
