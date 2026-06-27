@@ -560,9 +560,13 @@ else
   CHROOT_CMD="chroot /mnt /bin/bash"
 fi
 
-# Run all chroot commands in a single heredoc
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE 4a: System configuration inside chroot (hostname, locale, passwords)
+# ═══════════════════════════════════════════════════════════════════════
+echo "[*] Entering chroot for system configuration..."
+
 $CHROOT_CMD << 'CHROOT_EOF'
-set -euo pipefail
+set -e
 
 echo "[*] Inside chroot — configuring system..."
 
@@ -572,10 +576,8 @@ sed -i "s|^HOSTNAME=.*|HOSTNAME=$HOSTNAME|" /etc/rc.conf 2>/dev/null || true
 echo "[*] Hostname set to: $HOSTNAME"
 
 # ── Keyboard layout ───────────────────────────────────────────────
-# Set console keymap in rc.conf — applied at boot by runit
 sed -i "s|^KEYMAP=.*|KEYMAP=$KEYMAP|" /etc/rc.conf 2>/dev/null || \
   echo "KEYMAP=$KEYMAP" >> /etc/rc.conf
-# Apply immediately for this session
 loadkeys "$KEYMAP" 2>/dev/null || true
 echo "[*] Keyboard layout set to: $KEYMAP"
 
@@ -588,9 +590,8 @@ if [ ! -d /usr/lib/musl ]; then
   xbps-reconfigure -f glibc-locales 2>/dev/null || true
   echo "[*] Locale set to: $LOCALE"
 else
-  # musl — no locale system, just set LANG for basic UTF-8
   echo "LANG=$LOCALE" > /etc/locale.conf 2>/dev/null || true
-  echo "[*] Locale set to: $LOCALE (musl — limited locale support)"
+  echo "[*] Locale set to: $LOCALE (musl)"
 fi
 
 # ── Root password ─────────────────────────────────────────────────
@@ -598,7 +599,7 @@ if [ -n "$ROOT_PASSWORD" ]; then
   echo "root:$ROOT_PASSWORD" | chpasswd
   echo "[*] Root password set."
 else
-  echo "[!] No root password set. Use --password-stdin or run passwd root after reboot."
+  echo "[!] No root password set."
 fi
 
 # ── User account ──────────────────────────────────────────────────
@@ -608,112 +609,94 @@ if [ -n "$USERNAME" ]; then
   if [ -n "$USER_PASSWORD" ]; then
     echo "$USERNAME:$USER_PASSWORD" | chpasswd
     echo "[*] Password set for $USERNAME."
-  else
-    echo "[!] No password set for $USERNAME. Run passwd $USERNAME after reboot."
   fi
-  echo "[*] User $USERNAME created with wheel + audio + video + input + network + bluetooth groups."
+  echo "[*] User $USERNAME created."
 fi
 
-# ── GRUB configuration (grub package already installed in Phase 3) ──
-# /etc/default/grub was created by the grub package install.
-# We modify it BEFORE grub-install so the core image is built with
-# the correct modules (btrfs) and kernel cmdline (rootflags=subvol=@).
+echo "[*] System configuration complete."
+CHROOT_EOF
+
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE 4b: GRUB configuration and install (OUTSIDE chroot)
+# ═══════════════════════════════════════════════════════════════════════
 echo ""
 echo "[*] Configuring GRUB..."
+
+# Configure /etc/default/grub inside /mnt
 if [ "$FS" = "btrfs" ]; then
-  echo "[*] Configuring GRUB for btrfs subvol=@..."
-  if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub 2>/dev/null; then
-    sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 rootflags=subvol=@"|' /etc/default/grub
+  if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /mnt/etc/default/grub 2>/dev/null; then
+    sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 rootflags=subvol=@"|' /mnt/etc/default/grub
   else
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 rootflags=subvol=@"' >> /etc/default/grub
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 rootflags=subvol=@"' >> /mnt/etc/default/grub
   fi
-  # GRUB needs the btrfs module preloaded to read the btrfs filesystem
-  if grep -q '^GRUB_PRELOAD_MODULES=' /etc/default/grub 2>/dev/null; then
-    if ! grep -q 'btrfs' /etc/default/grub; then
-      sed -i 's|^GRUB_PRELOAD_MODULES=.*|GRUB_PRELOAD_MODULES="btrfs"|' /etc/default/grub
+  if grep -q '^GRUB_PRELOAD_MODULES=' /mnt/etc/default/grub 2>/dev/null; then
+    if ! grep -q 'btrfs' /mnt/etc/default/grub 2>/dev/null; then
+      sed -i 's|^GRUB_PRELOAD_MODULES=.*|GRUB_PRELOAD_MODULES="btrfs"|' /mnt/etc/default/grub
     fi
   else
-    echo 'GRUB_PRELOAD_MODULES="btrfs"' >> /etc/default/grub
+    echo 'GRUB_PRELOAD_MODULES="btrfs"' >> /mnt/etc/default/grub
   fi
+  echo "[*] GRUB configured for btrfs (subvol=@, preload btrfs module)"
+else
+  echo "[*] GRUB configured (ext4, no subvolume flags)"
 fi
 
-# ── Run grub-install ──────────────────────────────────────────────
+# Run grub-install using chroot (needs /dev, /proc, /sys which are already bound)
 echo "[*] Running grub-install..."
 if [ "$IS_UEFI" -eq 1 ]; then
-  # Mount efivarfs if not mounted (needed for grub-install)
-  mountpoint -q /sys/firmware/efi/efivars 2>/dev/null || \
-    mount -t efivarfs none /sys/firmware/efi/efivars 2>/dev/null || true
-
-  # For btrfs root, GRUB needs btrfs module in the core image to read
-  # the filesystem and find /boot/grub/grub.cfg and the kernel.
-  # Use --modules to explicitly embed btrfs + part_gpt + fat (for ESP).
-  # Use --removable to install to /boot/efi/EFI/BOOT/bootx64.efi (the
-  # standard fallback path all UEFI firmware checks). This is more
-  # reliable than relying on NVRAM boot entries, especially in VMs
-  # (OVMF/edk2) where NVRAM may not persist.
   if [ "$FS" = "btrfs" ]; then
-    GRUB_MODULES="btrfs part_gpt fat ext2"
+    GRUB_MODS="--modules=btrfs,part_gpt,fat,ext2"
   else
-    GRUB_MODULES=""
+    GRUB_MODS=""
   fi
 
-  echo "[*] Installing GRUB to ESP with --removable (fallback boot path)..."
-  grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-    --bootloader-id="Void" --removable \
-    ${GRUB_MODULES:+--modules="$GRUB_MODULES"} \
-    2>&1 || {
-    echo "[!] grub-install --removable failed, trying without --removable..."
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-      --bootloader-id="Void" \
-      ${GRUB_MODULES:+--modules="$GRUB_MODULES"} \
-      2>&1 || {
-      echo "[!] grub-install failed again, trying with --no-nvram..."
-      grub-install --target=x86_64-efi --efi-directory=/boot/efi \
-        --bootloader-id="Void" --no-nvram \
-        ${GRUB_MODULES:+--modules="$GRUB_MODULES"} 2>&1 || true
+  echo "[*] Installing GRUB (UEFI, --removable)..."
+  chroot /mnt grub-install --target=x86_64-efi \
+    --efi-directory=/boot/efi --bootloader-id="Void" \
+    --removable $GRUB_MODS 2>&1 || {
+    echo "[!] --removable failed, trying standard..."
+    chroot /mnt grub-install --target=x86_64-efi \
+      --efi-directory=/boot/efi --bootloader-id="Void" $GRUB_MODS 2>&1 || {
+      echo "[!] standard failed, trying --no-nvram..."
+      chroot /mnt grub-install --target=x86_64-efi \
+        --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram $GRUB_MODS 2>&1 || true
     }
   }
 
-  # Verify GRUB EFI binary exists at both paths
+  # Verify EFI binary
   echo "[*] Checking GRUB EFI binary locations:"
-  for efi in /boot/efi/EFI/BOOT/bootx64.efi /boot/efi/EFI/Void/grubx64.efi; do
+  for efi in /mnt/boot/efi/EFI/BOOT/bootx64.efi /mnt/boot/efi/EFI/Void/grubx64.efi; do
     if [ -f "$efi" ]; then
       echo "[*] Found: $efi ($(stat -c %s "$efi" 2>/dev/null || echo '?') bytes)"
     else
       echo "[!] Missing: $efi"
     fi
   done
-
-  # Ensure fallback path always exists
-  mkdir -p /boot/efi/EFI/BOOT
-  if [ ! -f /boot/efi/EFI/BOOT/bootx64.efi ] && [ -f /boot/efi/EFI/Void/grubx64.efi ]; then
-    cp /boot/efi/EFI/Void/grubx64.efi /boot/efi/EFI/BOOT/bootx64.efi
+  mkdir -p /mnt/boot/efi/EFI/BOOT
+  if [ ! -f /mnt/boot/efi/EFI/BOOT/bootx64.efi ] && [ -f /mnt/boot/efi/EFI/Void/grubx64.efi ]; then
+    cp /mnt/boot/efi/EFI/Void/grubx64.efi /mnt/boot/efi/EFI/BOOT/bootx64.efi
     echo "[*] Copied grubx64.efi to fallback BOOT path"
   fi
-
-  echo "[*] GRUB installed (UEFI)."
 else
-  # BIOS: grub-install embeds core image into the BIOS boot partition
+  echo "[*] Installing GRUB (BIOS)..."
   if [ "$FS" = "btrfs" ]; then
-    grub-install --modules="btrfs part_gpt" "$DISK"
+    chroot /mnt grub-install --modules="btrfs part_gpt" "$DISK" 2>&1 || true
   else
-    grub-install "$DISK"
+    chroot /mnt grub-install "$DISK" 2>&1 || true
   fi
-  echo "[*] GRUB installed (BIOS)."
 fi
 
-# Verify /etc/default/grub has the btrfs settings
-if [ "$FS" = "btrfs" ]; then
-  echo "[*] GRUB config verification:"
-  grep -E 'GRUB_PRELOAD_MODULES|GRUB_CMDLINE_LINUX_DEFAULT' /etc/default/grub 2>/dev/null || \
-    echo "[!] WARNING: GRUB config missing btrfs settings!"
-fi
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE 4c: Kernel config, dracut, services, initramfs (inside chroot)
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "[*] Entering chroot for kernel + services + initramfs..."
 
-# ── Kernel ignorepkg config (kernel already installed in Phase 3) ─
-# If mainline kernel was installed, ignore the stock linux meta-package
-# to prevent it from being pulled in on future updates
+$CHROOT_CMD << 'CHROOT_EOF'
+set -e
+
+# ── Kernel ignorepkg config ───────────────────────────────────────
 if [ "$KERNEL" = "mainline" ]; then
-  echo ""
   echo "[*] Configuring ignorepkg for stock linux..."
   mkdir -p /etc/xbps.d
   if ! grep -q 'ignorepkg=linux' /etc/xbps.d/10-ignore.conf 2>/dev/null; then
@@ -759,17 +742,15 @@ if [ "$FS" = "btrfs" ]; then
   if grep -q 'rootflags=subvol=@' /boot/grub/grub.cfg 2>/dev/null; then
     echo "[*] Verified: grub.cfg has rootflags=subvol=@"
   else
-    echo "[!] WARNING: grub.cfg is missing rootflags=subvol=@"
-    echo "[!] The system may not boot correctly. Check /etc/default/grub and re-run grub-mkconfig."
+    echo "[!] WARNING: grub.cfg missing rootflags=subvol=@"
   fi
 fi
 
-# ── Verify kernel installed ───────────────────────────────────────
+# ── Verify boot artifacts ─────────────────────────────────────────
 echo ""
 echo "[*] Installed kernels:"
 xbps-query -l 2>/dev/null | grep -E '^ii linux' || true
 
-# CRITICAL: Check that at least one kernel with a vmlinuz is present
 KERNEL_FOUND=0
 for kdir in /boot/vmlinuz-*; do
   if [ -f "$kdir" ]; then
@@ -779,11 +760,9 @@ for kdir in /boot/vmlinuz-*; do
   fi
 done
 if [ "$KERNEL_FOUND" -eq 0 ]; then
-  echo "[!] WARNING: No kernel found in /boot/ System may not boot!"
-  echo "[!] Check: xbps-query -l | grep linux"
+  echo "[!] WARNING: No kernel in /boot/!"
 fi
 
-# CRITICAL: Check that initramfs was generated
 INITRAMFS_FOUND=0
 for ifile in /boot/initramfs-*.img; do
   if [ -f "$ifile" ]; then
@@ -793,14 +772,11 @@ for ifile in /boot/initramfs-*.img; do
   fi
 done
 if [ "$INITRAMFS_FOUND" -eq 0 ]; then
-  echo "[!] WARNING: No initramfs found in /boot/ System may not boot!"
-  echo "[!] Try: xbps-reconfigure -f linux-mainline"
+  echo "[!] WARNING: No initramfs in /boot/!"
 fi
 
-# CRITICAL: Check that grub.cfg was generated
 if [ ! -f /boot/grub/grub.cfg ]; then
-  echo "[!] WARNING: /boot/grub/grub.cfg not found!"
-  echo "[!] Running grub-mkconfig manually..."
+  echo "[!] WARNING: grub.cfg not found! Running grub-mkconfig..."
   grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || true
 fi
 
