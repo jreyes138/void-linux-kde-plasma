@@ -643,6 +643,17 @@ fi
 
 # Run grub-install using chroot (needs /dev, /proc, /sys which are already bound)
 echo "[*] Running grub-install..."
+
+# Verify ESP is mounted at /mnt/boot/efi
+if [ "$IS_UEFI" -eq 1 ]; then
+  if ! mountpoint -q /mnt/boot/efi 2>/dev/null; then
+    echo "[!] /mnt/boot/efi not mounted! Mounting ESP..."
+    mkdir -p /mnt/boot/efi
+    mount "$PART1" /mnt/boot/efi
+  fi
+fi
+
+GRUB_INSTALL_SUCCESS=0
 if [ "$IS_UEFI" -eq 1 ]; then
   if [ "$FS" = "btrfs" ]; then
     GRUB_MODS="--modules=btrfs,part_gpt,fat,ext2"
@@ -653,15 +664,35 @@ if [ "$IS_UEFI" -eq 1 ]; then
   echo "[*] Installing GRUB (UEFI, --removable)..."
   chroot /mnt grub-install --target=x86_64-efi \
     --efi-directory=/boot/efi --bootloader-id="Void" \
-    --removable $GRUB_MODS 2>&1 || {
+    --removable $GRUB_MODS 2>&1 && GRUB_INSTALL_SUCCESS=1 || {
     echo "[!] --removable failed, trying standard..."
     chroot /mnt grub-install --target=x86_64-efi \
-      --efi-directory=/boot/efi --bootloader-id="Void" $GRUB_MODS 2>&1 || {
+      --efi-directory=/boot/efi --bootloader-id="Void" $GRUB_MODS 2>&1 && GRUB_INSTALL_SUCCESS=1 || {
       echo "[!] standard failed, trying --no-nvram..."
       chroot /mnt grub-install --target=x86_64-efi \
-        --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram $GRUB_MODS 2>&1 || true
+        --efi-directory=/boot/efi --bootloader-id="Void" --no-nvram $GRUB_MODS 2>&1 && GRUB_INSTALL_SUCCESS=1 || true
     }
   }
+
+  # If all grub-install methods failed, manually copy the EFI binary
+  if [ "$GRUB_INSTALL_SUCCESS" -eq 0 ]; then
+    echo "[!] All grub-install methods failed. Manual EFI binary copy..."
+    # The grub EFI binary may already exist in the package
+    GRUB_EFI_SRC=$(find /mnt/usr/lib/grub -name "grubx64.efi" 2>/dev/null | head -1)
+    if [ -z "$GRUB_EFI_SRC" ]; then
+      GRUB_EFI_SRC="/mnt/usr/lib/grub/x86_64-efi/grubx64.efi"
+    fi
+    if [ -f "$GRUB_EFI_SRC" ]; then
+      echo "[*] Found GRUB EFI binary at $GRUB_EFI_SRC"
+      mkdir -p /mnt/boot/efi/EFI/BOOT
+      cp "$GRUB_EFI_SRC" /mnt/boot/efi/EFI/BOOT/bootx64.efi
+      echo "[*] Copied to /mnt/boot/efi/EFI/BOOT/bootx64.efi"
+      GRUB_INSTALL_SUCCESS=1
+    else
+      echo "[!] No grubx64.efi found in /mnt/usr/lib/grub/"
+      echo "[!] GRUB package may not have installed correctly"
+    fi
+  fi
 
   # Verify EFI binary
   echo "[*] Checking GRUB EFI binary locations:"
