@@ -412,6 +412,18 @@ EXTRA_PKGS="xtools gptfdisk btrfs-progs"
 if [ "$NONFREE" -eq 1 ]; then
   EXTRA_PKGS="$EXTRA_PKGS void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree"
 fi
+# Install GRUB package from outside the chroot — more reliable than
+# installing inside the chroot where repo config may be incomplete
+if [ "$IS_UEFI" -eq 1 ]; then
+  EXTRA_PKGS="$EXTRA_PKGS grub-x86_64-efi"
+else
+  EXTRA_PKGS="$EXTRA_PKGS grub"
+fi
+# Install mainline kernel from outside too (base-system already pulled in
+# the stock 'linux' kernel, but we want mainline)
+if [ "$KERNEL" = "mainline" ]; then
+  EXTRA_PKGS="$EXTRA_PKGS linux-mainline"
+fi
 XBPS_ARCH=$ARCH xbps-install -y -r /mnt -R "$REPO" $EXTRA_PKGS || true
 
 # ── Set up repository config inside the chroot ──────────────────────
@@ -570,21 +582,11 @@ if [ -n "$USERNAME" ]; then
   echo "[*] User $USERNAME created with wheel + audio + video + input + network + bluetooth groups."
 fi
 
-# ── Install GRUB package ───────────────────────────────────────────
-echo ""
-echo "[*] Installing GRUB package..."
-if [ "$IS_UEFI" -eq 1 ]; then
-  echo "[*] UEFI system — installing grub-x86_64-efi..."
-  xbps-install -Sy grub-x86_64-efi || true
-else
-  echo "[*] BIOS system — installing grub..."
-  xbps-install -Sy grub || true
-fi
-
-# ── GRUB configuration (AFTER grub package, BEFORE grub-install) ───
-# /etc/default/grub is created by the grub package install.
+# ── GRUB configuration (grub package already installed in Phase 3) ──
+# /etc/default/grub was created by the grub package install.
 # We modify it BEFORE grub-install so the core image is built with
 # the correct modules (btrfs) and kernel cmdline (rootflags=subvol=@).
+echo ""
 echo "[*] Configuring GRUB..."
 if [ "$FS" = "btrfs" ]; then
   echo "[*] Configuring GRUB for btrfs subvol=@..."
@@ -634,21 +636,18 @@ if [ "$FS" = "btrfs" ]; then
     echo "[!] WARNING: GRUB config missing btrfs settings!"
 fi
 
-# ── Kernel selection ──────────────────────────────────────────────
-echo ""
-echo "[*] Kernel selection: $KERNEL"
+# ── Kernel ignorepkg config (kernel already installed in Phase 3) ─
+# If mainline kernel was installed, ignore the stock linux meta-package
+# to prevent it from being pulled in on future updates
 if [ "$KERNEL" = "mainline" ]; then
-  echo "[*] Installing linux-mainline..."
-  xbps-install -Sy linux-mainline || true
-  # Ignore the stock linux meta-package to prevent it from being pulled in
+  echo ""
+  echo "[*] Configuring ignorepkg for stock linux..."
   mkdir -p /etc/xbps.d
   if ! grep -q 'ignorepkg=linux' /etc/xbps.d/10-ignore.conf 2>/dev/null; then
     echo "ignorepkg=linux" >> /etc/xbps.d/10-ignore.conf
     echo "ignorepkg=linux-headers" >> /etc/xbps.d/10-ignore.conf
   fi
-  echo "[*] linux-mainline installed. Stock linux ignored."
-else
-  echo "[*] Using stock linux kernel (installed by base-system)."
+  echo "[*] Stock linux ignored in favor of linux-mainline."
 fi
 
 # ── Dracut btrfs module ───────────────────────────────────────────
