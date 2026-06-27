@@ -816,12 +816,108 @@ echo "[*] Chroot configuration complete."
 CHROOT_EOF
 
 # ═══════════════════════════════════════════════════════════════════════
-# PHASE 5: Cleanup and reboot
+# PHASE 5: Boot diagnostic, cleanup and reboot
 # ═══════════════════════════════════════════════════════════════════════
 echo ""
 echo "══════════════════════════════════════════════════════════════"
-echo "  Phase 5: Cleanup and Reboot"
+echo "  Phase 5: Boot Diagnostic + Cleanup"
 echo "══════════════════════════════════════════════════════════════"
+
+# ── Boot diagnostic report ───────────────────────────────────────────
+# Check all boot-critical files before unmounting so we can see
+# exactly what's on the disk and what's missing.
+echo ""
+echo "╔════════════════════════════════════════════════════════════════╗"
+echo "║          BOOT DIAGNOSTIC REPORT                                ║"
+echo "╚════════════════════════════════════════════════════════════════╝"
+echo ""
+
+echo "── Partitions ──"
+lsblk "$DISK" 2>/dev/null || true
+echo ""
+
+echo "── ESP contents ($PART1) ──"
+if [ "$IS_UEFI" -eq 1 ]; then
+  if mountpoint -q /mnt/boot/efi 2>/dev/null; then
+    echo "ESP mounted at /mnt/boot/efi: YES"
+  else
+    echo "ESP mounted at /mnt/boot/efi: NO — remounting..."
+    mount "$PART1" /mnt/boot/efi 2>/dev/null || true
+  fi
+  echo ""
+  echo "EFI files on ESP:"
+  find /mnt/boot/efi -type f 2>/dev/null | while read f; do
+    size=$(stat -c %s "$f" 2>/dev/null || echo "?")
+    echo "  $f ($size bytes)"
+  done
+  echo ""
+  echo "EFI directories on ESP:"
+  find /mnt/boot/efi -type d 2>/dev/null | sort | while read d; do
+    echo "  $d/"
+  done
+  echo ""
+  if [ -f /mnt/boot/efi/EFI/BOOT/bootx64.efi ]; then
+    echo "[OK] /boot/efi/EFI/BOOT/bootx64.efi EXISTS"
+  else
+    echo "[FAIL] /boot/efi/EFI/BOOT/bootx64.efi MISSING — firmware won't find bootloader!"
+  fi
+  if [ -f /mnt/boot/efi/EFI/Void/grubx64.efi ]; then
+    echo "[OK] /boot/efi/EFI/Void/grubx64.efi EXISTS"
+  else
+    echo "[--] /boot/efi/EFI/Void/grubx64.efi not found (ok if --removable used)"
+  fi
+else
+  echo "BIOS mode — no ESP"
+fi
+echo ""
+
+echo "── Kernel + initramfs in /mnt/boot ──"
+echo "vmlinuz files:"
+ls -la /mnt/boot/vmlinuz-* 2>/dev/null || echo "  [FAIL] No vmlinuz-* found!"
+echo ""
+echo "initramfs files:"
+ls -la /mnt/boot/initramfs-* 2>/dev/null || echo "  [FAIL] No initramfs-* found!"
+echo ""
+
+echo "── GRUB config ──"
+if [ -f /mnt/boot/grub/grub.cfg ]; then
+  echo "[OK] /boot/grub/grub.cfg EXISTS ($(stat -c %s /mnt/boot/grub/grub.cfg) bytes)"
+  echo ""
+  echo "  Kernel entries in grub.cfg:"
+  grep -n 'linux\|initrd\|rootflags\|subvol' /mnt/boot/grub/grub.cfg 2>/dev/null | head -20
+else
+  echo "[FAIL] /boot/grub/grub.cfg MISSING!"
+fi
+echo ""
+
+echo "── /etc/default/grub ──"
+if [ -f /mnt/etc/default/grub ]; then
+  echo "[OK] /etc/default/grub EXISTS"
+  grep -E 'GRUB_CMDLINE|GRUB_PRELOAD' /mnt/etc/default/grub 2>/dev/null || echo "  (no GRUB_CMDLINE or GRUB_PRELOAD entries)"
+else
+  echo "[FAIL] /etc/default/grub MISSING!"
+fi
+echo ""
+
+echo "── fstab ──"
+cat /mnt/etc/fstab 2>/dev/null || echo "  [FAIL] No fstab!"
+echo ""
+
+echo "── btrfs subvolumes ──"
+if [ "$FS" = "btrfs" ]; then
+  mount "$PART2" /mnt/tmp_btrfs_check 2>/dev/null || true
+  btrfs subvolume list /mnt/tmp_btrfs_check 2>/dev/null || true
+  btrfs subvolume get-default /mnt/tmp_btrfs_check 2>/dev/null || echo "  Could not get default subvolume"
+  umount /mnt/tmp_btrfs_check 2>/dev/null || true
+fi
+echo ""
+
+echo "── Installed packages (kernel + grub) ──"
+xbps-query -r /mnt -l 2>/dev/null | grep -iE 'linux|grub' || echo "  [FAIL] No kernel or grub packages found!"
+echo ""
+
+echo "── Diagnostic complete ──"
+echo ""
 
 # Unmount everything
 echo "[*] Unmounting /mnt..."
