@@ -373,6 +373,20 @@ if [ "$FS" = "btrfs" ]; then
   mount "$PART2" /mnt
   btrfs subvolume create /mnt/@
   btrfs subvolume create /mnt/@home
+
+  # Set @ as the default subvolume. This is CRITICAL for GRUB:
+  # GRUB's btrfs module reads the default subvolume. Without this,
+  # GRUB sees the top-level (subvolid=5) where /boot/grub/grub.cfg
+  # doesn't exist — it's inside @. Setting @ as default makes GRUB
+  # find /boot/grub/grub.cfg and /boot/vmlinuz-* correctly.
+  DEFAULT_ID=$(btrfs subvolume list /mnt | grep ' path @$' | awk '{print $2}')
+  if [ -n "$DEFAULT_ID" ]; then
+    btrfs subvolume set-default "$DEFAULT_ID" /mnt
+    echo "[*] Set @ (subvolid=$DEFAULT_ID) as default subvolume"
+  else
+    echo "[!] WARNING: Could not find @ subvolume ID to set as default"
+  fi
+
   umount /mnt
 
   # Mount root subvolume
