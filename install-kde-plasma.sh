@@ -365,6 +365,24 @@ echo ""
 echo "=== Step 2.4: Installing curl and wget (needed for theme downloads) ==="
 xinstall curl wget
 
+# ── Enable nonfree and multilib repositories ──────────────────────────
+# void-repo-nonfree: packages with non-free licenses (firmware blobs,
+#   proprietary drivers, patented codecs). Needed for some Wi-Fi/GPU
+#   firmware and media codecs.
+# void-repo-multilib: 32-bit compatibility libraries for x86_64 (glibc).
+#   Needed for Steam, Wine, and some proprietary 32-bit apps.
+# void-repo-multilib-nonfree: non-free 32-bit packages (glibc x86_64 only).
+# These packages install a repository config file in /usr/share/xbps.d/.
+# On non-x86_64 or musl, multilib packages don't exist — xinstall will
+# warn but not abort.
+echo ""
+echo "=== Step 2.5: Enabling nonfree and multilib repositories ==="
+xinstall void-repo-nonfree void-repo-multilib void-repo-multilib-nonfree
+# Re-sync index to pick up the new repositories
+xbps-install -Sy || true
+echo "[*] Repository configuration:"
+grep '^repository=' /usr/share/xbps.d/* 2>/dev/null | sed 's/.*repository=//' || true
+
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 3: Firmware and microcode (hardware-specific)
 # ═══════════════════════════════════════════════════════════════════════
@@ -957,19 +975,28 @@ WPWRAPPER
     echo "[*] pipewire-pulse example config not found at $PW_PULSE_SRC — skipping."
   fi
 
-  # Since pipewire.conf.d launches WirePlumber and pipewire-pulse directly,
-  # the autostart .desktop files would cause DUPLICATE instances.
-  # Multiple WirePlumber/pipeWire-pulse instances fight over ALSA device
-  # reservation (org.freedesktop.ReserveDevice1.Audio0) and PulseAudio
-  # sockets, causing audio to fail with only "Dummy Output" as sink.
-  # Remove ALL autostart .desktop files — pipewire.conf.d handles everything.
+  # pipewire.conf.d launches WirePlumber and pipewire-pulse directly via
+  # context.exec INSIDE the pipewire daemon. The wireplumber.desktop and
+  # pipewire-pulse.desktop autostart files would cause DUPLICATE instances
+  # that fight over ALSA device reservation (ReserveDevice1.Audio0) and
+  # PulseAudio sockets, causing "Dummy Output" as the only sink.
+  # Remove those two — but KEEP pipewire.desktop, because it starts the
+  # main pipewire daemon itself. Without pipewire.desktop, pipewire never
+  # starts, so the conf.d context.exec lines never run → no audio at all.
   if [ -L "$WP_CONF_DST" ] || [ -f "$WP_CONF_DST" ]; then
-    for autostart_file in wireplumber.desktop pipewire.desktop pipewire-pulse.desktop; do
+    for autostart_file in wireplumber.desktop pipewire-pulse.desktop; do
       if [ -f "/etc/xdg/autostart/$autostart_file" ]; then
         rm -f "/etc/xdg/autostart/$autostart_file"
         echo "[*] Removed $autostart_file autostart (launched via pipewire.conf.d)"
       fi
     done
+    # Ensure pipewire.desktop is present — it starts the main daemon
+    PW_DESKTOP_SRC=/usr/share/applications/pipewire.desktop
+    PW_DESKTOP_DST=/etc/xdg/autostart/pipewire.desktop
+    if [ ! -f "$PW_DESKTOP_DST" ] && [ -f "$PW_DESKTOP_SRC" ]; then
+      cp "$PW_DESKTOP_SRC" "$PW_DESKTOP_DST"
+      echo "[*] Restored pipewire.desktop to autostart (starts main pipewire daemon)"
+    fi
   fi
 
   # ALSA config symlinks — route ALSA apps through PipeWire
@@ -1079,6 +1106,38 @@ if [ $BLUETOOTH_DETECTED -eq 1 ]; then
   fi
 else
   echo "[*] No Bluetooth detected. Skipping bluez."
+fi
+
+# ── Power management (bare metal only) ────────────────────────────────
+# powerdevil: KDE's power management daemon — battery, brightness,
+#   suspend/hibernate, lid switch handling. Integrates with Plasma's
+#   battery widget and system settings.
+# power-profiles-daemon: D-Bus service for switching between power
+#   profiles (balanced/power-saver/performance). powerdevil uses this
+#   to expose profile switching in the KDE battery widget.
+# upower: power device enumeration (batteries, UPS) — dependency of
+#   both powerdevil and power-profiles-daemon, installed automatically.
+# acpid conflicts with elogind for lid-switch/power-button handling.
+#   elogind handles these natively, so we do NOT install acpid.
+# VMs don't need power management — skip entirely.
+if [ "$VIRT_PLATFORM" = "none" ]; then
+  echo ""
+  echo "=== Step 8.3: Power management (bare metal) ==="
+  xinstall powerdevil power-profiles-daemon upower
+
+  # Enable power-profiles-daemon runit service
+  # powerdevil runs as a KDE Plasma component (no runit service needed)
+  if [ -d /etc/sv/power-profiles-daemon ] && [ ! -L /var/service/power-profiles-daemon ]; then
+    ln -s /etc/sv/power-profiles-daemon /var/service/
+    echo "[*] power-profiles-daemon symlink created."
+  elif [ -L /var/service/power-profiles-daemon ]; then
+    echo "[*] power-profiles-daemon already enabled."
+  fi
+  echo "[*] Power management installed: powerdevil + power-profiles-daemon"
+  echo "[*] Battery widget, brightness, suspend/hibernate available in Plasma."
+else
+  echo ""
+  echo "=== Step 8.3: Power management skipped (VM: $VIRT_PLATFORM) ==="
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1536,7 +1595,7 @@ alias catn="bat --paging=never --plain"
 alias bathelp="bat --paging=never --language=help"
 
 # ── Aliases: Void Linux package management (XBPS) ─────────────────────
-alias update="sudo xbps-install -Su"
+alias update="sudo xbps-install -Su && flatpak update -y 2>/dev/null; flatpak uninstall --unused -y 2>/dev/null || true"
 alias install="sudo xbps-install -S"
 alias search="xbps-query -Rs"
 alias remove="sudo xbps-remove -R"
@@ -1651,7 +1710,7 @@ alias bathelp='bat --paging=never --language=help'
 # ──────────────────────────────────────────────────────────────────────
 # [6] ALIASES — VOID LINUX PACKAGE MANAGEMENT (XBPS)
 # ──────────────────────────────────────────────────────────────────────
-alias update='sudo xbps-install -Su'
+alias update='sudo xbps-install -Su && flatpak update -y 2>/dev/null; flatpak uninstall --unused -y 2>/dev/null || true'
 alias install='sudo xbps-install -S'
 alias search='xbps-query -Rs'
 alias remove='sudo xbps-remove -R'
@@ -2108,6 +2167,100 @@ echo "[*] Update Flatpak apps periodically: flatpak update"
 else
   echo "[*] Flatpak skipped (--no-flatpak)."
 fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 13b: Automatic updates (snooze-daily + cron.daily script)
+# ═══════════════════════════════════════════════════════════════════════
+# Void doesn't have an auto-update daemon. We use snooze (Void's native
+# cron alternative) with a daily script in /etc/cron.daily that runs:
+#   1. xbps-install -Su (system packages)
+#   2. flatpak update (if flatpak is installed)
+#   3. xbps-remove -O (clean cache)
+# The script logs to /var/log/void-autoupdate.log and never aborts on
+# error — it logs failures but doesn't block the system from booting.
+# snooze-daily fires once per day (not at a fixed time, but within 24h
+# of the last run, accounting for missed runs while powered off).
+echo ""
+echo "══════════════════════════════════════════════════════════════"
+echo "  Phase 13b: Automatic Updates"
+echo "══════════════════════════════════════════════════════════════"
+
+# Install snooze for cron-style scheduling
+xinstall snooze
+
+# Enable snooze-daily runit service
+if [ -d /etc/sv/snooze-daily ] && [ ! -L /var/service/snooze-daily ]; then
+  ln -s /etc/sv/snooze-daily /var/service/
+  echo "[*] snooze-daily symlink created."
+elif [ -L /var/service/snooze-daily ]; then
+  echo "[*] snooze-daily already enabled."
+fi
+
+# Create the daily auto-update script
+# /etc/cron.daily is executed by snooze-daily's run script via run-parts
+mkdir -p /etc/cron.daily
+cat > /etc/cron.daily/void-autoupdate << 'AUTUPDATE'
+#!/bin/sh
+# void-autoupdate — daily system + Flatpak update
+# Executed by snooze-daily via run-parts /etc/cron.daily
+# Logs to /var/log/void-autoupdate.log
+LOG=/var/log/void-autoupdate.log
+echo "=== $(date) ===" >> "$LOG"
+
+# Update XBPS packages
+echo "[*] Updating system packages..." >> "$LOG"
+xbps-install -Syu >> "$LOG" 2>&1 || echo "[!] xbps-update failed" >> "$LOG"
+
+# Update Flatpak apps (if flatpak is installed)
+if command -v flatpak >/dev/null 2>&1; then
+  echo "[*] Updating Flatpak apps..." >> "$LOG"
+  flatpak update -y >> "$LOG" 2>&1 || echo "[!] flatpak update failed" >> "$LOG"
+  flatpak uninstall --unused -y >> "$LOG" 2>&1 || true
+fi
+
+# Clean XBPS cache
+echo "[*] Cleaning package cache..." >> "$LOG"
+xbps-remove -O >> "$LOG" 2>&1 || true
+
+echo "[*] Auto-update complete." >> "$LOG"
+echo "" >> "$LOG"
+AUTUPDATE
+chmod 755 /etc/cron.daily/void-autoupdate
+echo "[*] Created /etc/cron.daily/void-autoupdate"
+
+# Rotate log if it gets large (>10MB), keep last 3
+mkdir -p /etc/cron.weekly
+cat > /etc/cron.weekly/void-autoupdate-logrotate << 'LOGROTATE'
+#!/bin/sh
+# Rotate void-autoupdate.log — keep last 3, rotate at 10MB
+LOG=/var/log/void-autoupdate.log
+if [ -f "$LOG" ]; then
+  SIZE=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
+  if [ "$SIZE" -gt 10485760 ]; then
+    for i in 2 1; do
+      [ -f "${LOG}.$i" ] && mv "${LOG}.$i" "${LOG}.$((i+1))"
+    done
+    mv "$LOG" "${LOG}.1"
+    echo "=== $(date) — log rotated ===" > "$LOG"
+  fi
+fi
+LOGROTATE
+chmod 755 /etc/cron.weekly/void-autoupdate-logrotate
+echo "[*] Created /etc/cron.weekly/void-autoupdate-logrotate"
+
+# Enable snooze-weekly for the log rotation
+if [ -d /etc/sv/snooze-weekly ] && [ ! -L /var/service/snooze-weekly ]; then
+  ln -s /etc/sv/snooze-weekly /var/service/
+  echo "[*] snooze-weekly symlink created."
+elif [ -L /var/service/snooze-weekly ]; then
+  echo "[*] snooze-weekly already enabled."
+fi
+
+echo "[*] Automatic updates configured:"
+echo "    - snooze-daily runs /etc/cron.daily/void-autoupdate"
+echo "    - Updates xbps packages + flatpak apps, cleans cache"
+echo "    - Logs to /var/log/void-autoupdate.log"
+echo "    - snooze-weekly rotates the log"
 
 # ═══════════════════════════════════════════════════════════════════════
 # PHASE 14: Gruvbox Theme (optional — enabled with --gruvbox)
@@ -2703,7 +2856,18 @@ echo "    - elogind        (/var/service/elogind)  — session/seat mgmt"
 echo "    - zramen         (/var/service/zramen)   — zram compressed swap (lz4, 25% RAM)"
 echo "    - sddm           (/var/service/sddm)      — display manager"
 echo "    - NetworkManager (/var/service/NetworkManager)"
+echo "    - snooze-daily   (/var/service/snooze-daily) — auto-update (xbps + flatpak)"
+echo "    - snooze-weekly  (/var/service/snooze-weekly) — log rotation"
 [ $BLUETOOTH_DETECTED -eq 1 ] && echo "    - bluetoothd      (/var/service/bluetoothd)"
+if [ "$VIRT_PLATFORM" = "none" ]; then
+  echo "    - power-profiles-daemon (/var/service/power-profiles-daemon) — power profiles"
+fi
+echo ""
+echo "  Repositories enabled:"
+echo "    - current (main)"
+echo "    - nonfree"
+echo "    - multilib (32-bit compatibility, x86_64 glibc only)"
+echo "    - multilib/nonfree"
 echo ""
 echo "  SDDM will show the login screen on boot."
 echo "  Select 'Plasma (X11)' or 'Plasma (Wayland)' from the session dropdown."
@@ -2737,8 +2901,14 @@ echo "    flatpak update              — update all Flatpak apps"
 echo "    flatpak list                — list installed apps"
 echo "    flatpak uninstall <app-id>  — remove an app"
 echo ""
+echo "  Automatic updates:"
+echo "    snooze-daily runs /etc/cron.daily/void-autoupdate"
+echo "    Updates xbps packages + Flatpak apps, cleans cache"
+echo "    Logs: /var/log/void-autoupdate.log"
+echo "    Manual check: cat /var/log/void-autoupdate.log"
+echo ""
 echo "  Shell aliases:"
-echo "    update     — sudo xbps-install -Su"
+echo "    update     — sudo xbps-install -Su && flatpak update -y"
 echo "    install    — sudo xbps-install -S"
 echo "    search     — xbps-query -Rs"
 echo "    remove     — sudo xbps-remove -R"
