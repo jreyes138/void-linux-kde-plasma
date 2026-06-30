@@ -2319,8 +2319,8 @@ if [ "$GRUVBOX" -eq 1 ]; then
     dl_file "$LIGHT_URL" "$COLOR_SCHEMES_DIR/GruvboxPlusLight.colors" && echo "[*] Downloaded GruvboxPlusLight.colors" || echo "[!] Failed to download light color scheme"
     chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$COLOR_SCHEMES_DIR"
 
-    ACTIVE_SCHEME="GruvboxPlusDark"
-    [ "$GRUVBOX_VARIANT" = "light" ] && ACTIVE_SCHEME="GruvboxPlusLight"
+    ACTIVE_SCHEME="GruvboxPlus Dark"
+    [ "$GRUVBOX_VARIANT" = "light" ] && ACTIVE_SCHEME="GruvboxPlus Light"
 
     # Write scheme name to kdeglobals (plasma-apply-colorscheme won't work
     # before first login — colors apply on next login)
@@ -2341,33 +2341,36 @@ if [ "$GRUVBOX" -eq 1 ]; then
     chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
     echo "[*] Active color scheme: $ACTIVE_SCHEME"
 
-    # Set widgetStyle in kdeglobals (Breeze widget style works with Gruvbox colors).
-    # Do NOT set LookAndFeelPackage — that triggers KDE to apply a full look-and-feel
-    # package (e.g. Breeze Dark) which overrides the color scheme and icon theme we
-    # just set. By leaving LookAndFeelPackage unset, KDE reads ColorScheme and Theme
-    # directly from kdeglobals/kdedefaults.
+    # Set widgetStyle and LookAndFeelPackage in kdeglobals.
+    # We use org.kde.breezedark.desktop as the LookAndFeelPackage because:
+    # (1) It's installed as part of kde-plasma — always available
+    # (2) It gives a dark base on first login (dark window decorations, dark plasma theme)
+    # (3) A first-login autostart script (below) overrides the color scheme and
+    #     icons with Gruvbox values via plasma-apply-colorscheme
+    # Without LookAndFeelPackage, KDE falls back to Breeze Light on first login.
     if grep -q "^\[KDE\]" "$KDEGLOBALS" 2>/dev/null; then
-      if ! grep -q "^widgetStyle=" "$KDEGLOBALS" 2>/dev/null; then
+      if grep -q "^widgetStyle=" "$KDEGLOBALS" 2>/dev/null; then
+        sed -i 's/^widgetStyle=.*/widgetStyle=Breeze/' "$KDEGLOBALS" 2>/dev/null || true
+      else
         sed -i '/^\[KDE\]/a widgetStyle=Breeze' "$KDEGLOBALS" 2>/dev/null || true
       fi
-      # Remove any existing LookAndFeelPackage so KDE doesn't override our colors
       if grep -q "^LookAndFeelPackage=" "$KDEGLOBALS" 2>/dev/null; then
-        sed -i '/^LookAndFeelPackage=/d' "$KDEGLOBALS" 2>/dev/null || true
+        sed -i 's/^LookAndFeelPackage=.*/LookAndFeelPackage=org.kde.breezedark.desktop/' "$KDEGLOBALS" 2>/dev/null || true
+      else
+        sed -i '/^\[KDE\]/a LookAndFeelPackage=org.kde.breezedark.desktop' "$KDEGLOBALS" 2>/dev/null || true
       fi
     else
       echo "" >> "$KDEGLOBALS"
       echo "[KDE]" >> "$KDEGLOBALS"
       echo "widgetStyle=Breeze" >> "$KDEGLOBALS"
+      echo "LookAndFeelPackage=org.kde.breezedark.desktop" >> "$KDEGLOBALS"
     fi
     chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
 
-    # Write kdedefaults/kdeglobals with Gruvbox color scheme + icons
-    # Do NOT write kdedefaults/package — that sets the look-and-feel which
-    # overrides our color scheme. Leave it absent so KDE falls back to kdeglobals.
+    # Write kdedefaults with Breeze Dark look-and-feel as base
     KDE_DEFAULTS_DIR="$G_USER_HOME/.config/kdedefaults"
     mkdir -p "$KDE_DEFAULTS_DIR"
-    # Remove any stale kdedefaults/package from a previous Breeze Dark install
-    rm -f "$KDE_DEFAULTS_DIR/package" 2>/dev/null || true
+    echo "org.kde.breezedark.desktop" > "$KDE_DEFAULTS_DIR/package"
     # Use correct icon variant
     ICON_THEME_DEFAULT="Gruvbox-Plus-Dark"
     [ "$GRUVBOX_VARIANT" = "light" ] && ICON_THEME_DEFAULT="Gruvbox-Plus-Light"
@@ -2382,6 +2385,28 @@ Theme=$ICON_THEME_DEFAULT
 widgetStyle=Breeze
 KDEDEFGLOBALS
     chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDE_DEFAULTS_DIR"
+
+    # ── 14.1b: First-login autostart to apply Gruvbox color scheme ─────
+    # Breeze Dark look-and-feel applies on first login (via kdedefaults/package),
+    # but it overrides ColorScheme and Theme with Breeze Dark values. This
+    # autostart script runs after plasmashell starts, applies the Gruvbox
+    # color scheme and icon theme via plasma-apply-colorscheme, then self-deletes.
+    AUTOSTART_DIR="$G_USER_HOME/.config/autostart"
+    mkdir -p "$AUTOSTART_DIR"
+    cat > "$AUTOSTART_DIR/apply-gruvbox-theme.desktop" << 'THEMEDESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Apply Gruvbox Theme
+Exec=bash -c 'sleep 5 && plasma-apply-colorscheme "SCHEME_PLACEHOLDER" 2>/dev/null; kwriteconfig6 --file kdeglobals --group "Icons" --key "Theme" "ICON_PLACEHOLDER" 2>/dev/null; kwriteconfig6 --file kdeglobals --group "Icons" --key "Theme" "ICON_PLACEHOLDER" 2>/dev/null; rm -f "$HOME/.config/autostart/apply-gruvbox-theme.desktop"'
+Icon=preferences-desktop-color
+Terminal=false
+X-KDE-autostart-condition=plasmashell
+OnlyShowIn=KDE
+THEMEDESKTOP
+    sed -i "s|SCHEME_PLACEHOLDER|$ACTIVE_SCHEME|" "$AUTOSTART_DIR/apply-gruvbox-theme.desktop" 2>/dev/null || true
+    sed -i "s|ICON_PLACEHOLDER|$ICON_THEME_DEFAULT|" "$AUTOSTART_DIR/apply-gruvbox-theme.desktop" 2>/dev/null || true
+    chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$AUTOSTART_DIR" 2>/dev/null || true
+    echo "[*] Gruvbox theme autostart created — applies on first login"
 
     # ── 14.2: Icon Pack ─────────────────────────────────────────────
     if [ "$GRUVBOX_ICONS" -eq 1 ]; then
@@ -3262,7 +3287,7 @@ fi
 
 if [ "$GRUVBOX" -eq 1 ]; then
   echo "  Gruvbox theme installed (--gruvbox):"
-  echo "    [✓] Color scheme: GruvboxPlus${GRUVBOX_VARIANT^}"
+  echo "    [✓] Color scheme: GruvboxPlus ${GRUVBOX_VARIANT^}"
   [ "$GRUVBOX_ICONS" -eq 1 ] && echo "    [✓] Icons: Gruvbox-Plus-${GRUVBOX_VARIANT^}"
   [ "$GRUVBOX_KVANTUM" -eq 1 ] && echo "    [✓] Kvantum: gruvbox-kvantum (Qt5/Qt6)"
   [ "$GRUVBOX_FASTFETCH" -eq 1 ] && echo "    [✓] Fastfetch: gruvbox config"
