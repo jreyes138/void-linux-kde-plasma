@@ -99,8 +99,6 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 
 ### Btrfs Compression (automatic if btrfs root)
 - zstd transparent compression enabled via fstab (compress=zstd)
-- snapper installed for snapshot management (timeline + cleanup)
-- btrfs quota enabled for snapshot space tracking
 - Use `--no-btrfs-compress` to skip
 - Only activates if root filesystem is btrfs — install Void with btrfs to use
 

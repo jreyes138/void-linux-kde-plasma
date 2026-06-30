@@ -472,7 +472,7 @@ fi
 # If the root filesystem is btrfs, enable zstd transparent compression
 # by adding compress=zstd to fstab and remounting. zstd gives good
 # compression ratios (typically 2-3x on system files) with fast
-# decompression. Also install snapper for snapshot management.
+# decompression.
 # Disable with --no-btrfs-compress.
 echo ""
 echo "=== Step 3.4: Btrfs compression ==="
@@ -509,80 +509,6 @@ if [ "$ROOT_FS_TYPE" = "btrfs" ]; then
         echo "[!] Could not find btrfs root entry in fstab. Skipping compression."
       fi
     fi
-
-    # Install snapper for snapshot management
-    echo "[*] Installing snapper for btrfs snapshot management..."
-    xinstall snapper
-
-    # Configure snapper if not already configured
-    if [ ! -f /etc/snapper/configs/root ]; then
-      # snapper needs a config to function. Create one for the root subvolume.
-      # Find the root subvolume path
-      ROOT_SUBVOL=$(btrfs subvolume show / 2>/dev/null | head -1 | awk '{print $1}' || true)
-      if [ -n "$ROOT_SUBVOL" ]; then
-        echo "[*] Root subvolume: $ROOT_SUBVOL"
-      fi
-
-      # Create snapper config from the default template
-      if [ -f /etc/snapper/config-templates/default ]; then
-        cp /etc/snapper/config-templates/default /etc/snapper/configs/root
-        # Adjust the subvolume path to root
-        sed -i "s|^SUBVOLUME=.*|SUBVOLUME=\"/\"|" /etc/snapper/configs/root
-        echo "[*] Created snapper config for root subvolume."
-      else
-        echo "[!] No snapper config template found. Creating minimal config."
-        mkdir -p /etc/snapper/configs
-        cat > /etc/snapper/configs/root << 'SNAPPERCONF'
-# Snapper config for root filesystem
-SUBVOLUME="/"
-FSTYPE="btrfs"
-QGROUP=""
-
-# Limit the number of timeline snapshots
-TIMELINE_LIMIT_HOURLY="10"
-TIMELINE_LIMIT_DAILY="7"
-TIMELINE_LIMIT_WEEKLY="0"
-TIMELINE_LIMIT_MONTHLY="0"
-TIMELINE_LIMIT_YEARLY="0"
-
-# Number of snapshots to keep for cleanup
-EMPTY_LIMIT="2"
-NUMBER_LIMIT="50"
-NUMBER_LIMIT_IMPORTANT="10"
-
-# Cleanup settings
-EMPTY_PRE_POST_CLEANUP="yes"
-
-# Timeline settings
-TIMELINE_CREATE="yes"
-TIMELINE_CLEANUP="yes"
-
-# Number settings
-NUMBER_CLEANUP="yes"
-NUMBER_LIMIT="50"
-NUMBER_LIMIT_IMPORTANT="10"
-
-# Background monitoring
-BACKGROUND_LIMIT="10"
-SNAPPER_VERSION="0.9"
-SNAPPERCONF
-      fi
-
-      # Enable snapper runit services if available
-      for svc in snapperd snapper-timeline snapper-cleanup; do
-        if [ -d "/etc/sv/$svc" ]; then
-          ln -sf "/etc/sv/$svc" /var/service/
-          echo "[*] Enabled service: $svc"
-        fi
-      done
-    else
-      echo "[*] Snapper config already exists for root."
-    fi
-
-    # Enable btrfs quota for snapper snapshot space tracking
-    btrfs quota enable / 2>/dev/null && \
-      echo "[*] Enabled btrfs quota for snapshot space tracking." || \
-      echo "[!] Could not enable btrfs quota (may already be enabled)."
 
   else
     echo "[*] Btrfs root detected but compression skipped (--no-btrfs-compress)."
@@ -3221,11 +3147,6 @@ if [ "$ROOT_FS_TYPE" = "btrfs" ]; then
   if [ "$BTRFS_ENABLED" -eq 1 ]; then
     echo "    - zstd compression enabled (compress=zstd in fstab)"
   fi
-  echo "    - snapper installed for snapshot management"
-  echo "    Useful commands:"
-  echo "      snapper list              — list snapshots"
-  echo "      snapper create -d 'desc'  — create snapshot"
-  echo "      snapper delete <num>      — delete snapshot"
 else
   echo "    - $ROOT_FS_TYPE on $ROOT_DEVICE"
   echo "    - No compression (btrfs required for zstd compression)"
