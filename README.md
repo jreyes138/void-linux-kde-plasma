@@ -73,6 +73,9 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 | `--no-flatpak` | Skip Flatpak/Flathub setup and app installation |
 | `--no-mainline` | Skip linux-mainline kernel installation (keep stock LTS kernel) |
 | `--no-btrfs-compress` | Skip btrfs zstd compression enablement (if btrfs root) |
+| `--no-apparmor` | Skip AppArmor installation (MAC, enforce mode) |
+| `--no-hardening` | Skip kernel hardening (sysctl + GRUB cmdline) |
+| `--no-firewall` | Skip UFW + plasma-firewall installation |
 | `--autologin USER` | Enable SDDM autologin for the given user |
 
 ## Requirements
@@ -130,6 +133,11 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 - Brave Browser (com.brave.Browser)
 - Tutanota/Tuta (com.tutanota.Tutanota)
 - xdg-desktop-portal + xdg-desktop-portal-kde
+
+### Security
+- **AppArmor** — MAC framework with enforce mode, kernel cmdline params, runit core-service
+- **Kernel hardening** — sysctl (dmesg_restrict, kptr_restrict, BPF harden, ptrace_scope, sysrq=0, filesystem/network protections) + GRUB cmdline (init_on_free=1, page_alloc.shuffle=1)
+- **Firewall** — UFW (deny incoming, allow outgoing, SSH allowed) + plasma-firewall (KDE System Settings GUI)
 
 ## Void Linux specific gotchas handled
 

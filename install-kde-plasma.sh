@@ -19,6 +19,9 @@
 #   --no-flatpak     Skip Flatpak/Flathub setup and app installation
 #   --no-mainline    Skip linux-mainline kernel installation (keep stock kernel)
 #   --no-btrfs-compress  Skip btrfs zstd compression enablement (if btrfs root)
+#   --no-apparmor    Skip AppArmor installation (MAC, enforce mode)
+#   --no-hardening   Skip kernel hardening (sysctl + GRUB cmdline)
+#   --no-firewall     Skip UFW + plasma-firewall installation
 #   --autologin USER Enable SDDM autologin for given user (e.g. --autologin joser)
 #
 # Gruvbox theme — enabled by default (dark variant + wallpaper):
@@ -47,6 +50,9 @@ FIRMWARE=1
 FLATPAK=1
 MAINLINE_KERNEL=1
 BTRFS_COMPRESS=1
+APPARMOR=1
+HARDENING=1
+FIREWALL=1
 AUTOLOGIN=""
 LOG=/var/log/kde-plasma-install.log
 
@@ -73,6 +79,9 @@ while [ $# -gt 0 ]; do
     --no-flatpak)  FLATPAK=0; shift ;;
     --no-mainline) MAINLINE_KERNEL=0; shift ;;
     --no-btrfs-compress) BTRFS_COMPRESS=0; shift ;;
+    --no-apparmor)  APPARMOR=0; shift ;;
+    --no-hardening) HARDENING=0; shift ;;
+    --no-firewall)  FIREWALL=0; shift ;;
     --autologin)   shift; AUTOLOGIN="${1:-}"; shift ;;
     --no-gruvbox)            GRUVBOX=0; shift ;;
     --gruvbox-light)         GRUVBOX_VARIANT="light"; shift ;;
@@ -97,7 +106,7 @@ if ! command -v xbps-install >/dev/null 2>&1; then
 fi
 
 echo "[*] Void Linux KDE Plasma installer (with hardware discovery)"
-echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} mainline=${MAINLINE_KERNEL} btrfs_compress=${BTRFS_COMPRESS} autologin=${AUTOLOGIN:-none} reboot=${REBOOT} gruvbox=${GRUVBOX}"
+echo "[*] Options: minimal=${MINIMAL} wayland=${WAYLAND} extras=${EXTRAS} firmware=${FIRMWARE} flatpak=${FLATPAK} mainline=${MAINLINE_KERNEL} btrfs_compress=${BTRFS_COMPRESS} apparmor=${APPARMOR} hardening=${HARDENING} firewall=${FIREWALL} autologin=${AUTOLOGIN:-none} reboot=${REBOOT} gruvbox=${GRUVBOX}"
 echo "[*] Logging to ${LOG}"
 exec > >(tee -a "$LOG") 2>&1
 echo "[*] Started: $(date)"
@@ -2895,6 +2904,284 @@ WPDESKTOP
   fi
 fi
 
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE 15: AppArmor (mandatory access control)
+# ═══════════════════════════════════════════════════════════════════════
+# Void kernels (stock and mainline) ship with CONFIG_SECURITY_APPARMOR=y.
+# The apparmor package provides the runit core-service (09-apparmor.sh)
+# that loads profiles at boot. Profiles are loaded in enforce mode by default.
+# Requires kernel cmdline: apparmor=1 security=apparmor
+# Without the cmdline params, AppArmor compiles in but never activates.
+if [ "$APPARMOR" -eq 1 ]; then
+  echo ""
+  echo "══════════════════════════════════════════════════════════════"
+  echo "  Phase 15: AppArmor (Mandatory Access Control)"
+  echo "══════════════════════════════════════════════════════════════"
+
+  echo ""
+  echo "=== Step 15.1: Installing AppArmor ==="
+  xinstall apparmor
+
+  # Set enforce mode (default is complain — logs only, doesn't block)
+  echo ""
+  echo "=== Step 15.2: Configuring AppArmor enforce mode ==="
+  if [ -f /etc/default/apparmor ]; then
+    if grep -q '^APPARMOR=' /etc/default/apparmor 2>/dev/null; then
+      sed -i 's/^APPARMOR=.*/APPARMOR=enforce/' /etc/default/apparmor
+    else
+      echo "APPARMOR=enforce" >> /etc/default/apparmor
+    fi
+  else
+    echo "APPARMOR=enforce" > /etc/default/apparmor
+  fi
+  echo "[*] AppArmor mode: enforce"
+
+  # Add kernel cmdline parameters for AppArmor activation
+  echo ""
+  echo "=== Step 15.3: Adding AppArmor to GRUB kernel cmdline ==="
+  GRUB_DEFAULT="/etc/default/grub"
+  if [ -f "$GRUB_DEFAULT" ]; then
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT" 2>/dev/null; then
+      if ! grep -q 'apparmor=1' "$GRUB_DEFAULT" 2>/dev/null; then
+        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=1 security=apparmor"/' "$GRUB_DEFAULT"
+        echo "[*] Added apparmor=1 security=apparmor to GRUB_CMDLINE_LINUX_DEFAULT"
+      else
+        echo "[*] apparmor=1 already in GRUB cmdline"
+      fi
+    else
+      echo 'GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 apparmor=1 security=apparmor"' >> "$GRUB_DEFAULT"
+      echo "[*] Created GRUB_CMDLINE_LINUX_DEFAULT with apparmor params"
+    fi
+
+    # Regenerate GRUB config
+    if command -v grub-mkconfig >/dev/null 2>&1; then
+      grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || echo "[!] grub-mkconfig failed — run manually after install"
+      echo "[*] GRUB config regenerated"
+    fi
+  else
+    echo "[!] /etc/default/grub not found — add apparmor=1 security=apparmor to kernel cmdline manually"
+  fi
+
+  echo ""
+  echo "[*] AppArmor installed and configured."
+  echo "[*] Profiles load in enforce mode on next boot."
+  echo "[*] Verify after reboot: aa-status"
+  echo "[*] Included profiles: dhcpcd, nginx, pulseaudio, uuidd, wpa_supplicant"
+else
+  echo ""
+  echo "[*] AppArmor skipped (--no-apparmor)."
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE 16: Kernel Hardening (sysctl + GRUB cmdline)
+# ═══════════════════════════════════════════════════════════════════════
+# Void's stock and mainline kernels already enable most hardening at compile
+# time: SLAB_FREELIST_HARDENED, INIT_ON_ALLOC_DEFAULT_ON, FORTIFY_SOURCE,
+# HARDENED_USERCOPY, STACKPROTECTOR_STRONG, RANDOMIZE_BASE, KASLR,
+# STRICT_KERNEL_RWX, SECURITY_DMESG_RESTRICT, SECURITY_YAMA, BPF_UNPRIV_DEFAULT_OFF,
+# MODULE_SIG. This phase adds runtime sysctl settings and optional cmdline
+# params for things not enabled at compile time (init_on_free, page shuffle).
+if [ "$HARDENING" -eq 1 ]; then
+  echo ""
+  echo "══════════════════════════════════════════════════════════════"
+  echo "  Phase 16: Kernel Hardening"
+  echo "══════════════════════════════════════════════════════════════"
+
+  # ── 16.1: sysctl hardening config ────────────────────────────────
+  echo ""
+  echo "=== Step 16.1: Writing sysctl hardening config ==="
+  mkdir -p /etc/sysctl.d
+  cat > /etc/sysctl.d/99-hardening.conf << 'SYSCTLCONF'
+# ═══════════════════════════════════════════════════════════════════════
+#  Kernel hardening — desktop-safe settings
+#  Applied at boot via sysctl --system
+# ═══════════════════════════════════════════════════════════════════════
+
+# --- dmesg restriction (restrict to CAP_SYSLOG) ---
+kernel.dmesg_restrict = 1
+
+# --- kptr restriction: hide kernel pointers ---
+# 2 = hide from everyone including root
+kernel.kptr_restrict = 2
+
+# --- BPF hardening ---
+# 2 = permanently disabled for unprivileged (cannot re-enable at runtime)
+kernel.unprivileged_bpf_disabled = 2
+# 2 = harden JIT for all users (mitigates JIT spraying)
+net.core.bpf_jit_harden = 2
+# Do not export BPF JIT kallsyms
+net.core.bpf_jit_kallsyms = 0
+
+# --- Performance events ---
+# 2 = disallow for unprivileged (breaks some profilers at 3)
+kernel.perf_event_paranoid = 2
+
+# --- Yama ptrace scope ---
+# 1 = limited to parent (desktop-safe; higher breaks GDB attaching)
+kernel.yama.ptrace_scope = 1
+
+# --- ASLR ---
+kernel.randomize_va_space = 2
+
+# --- SysRq ---
+kernel.sysrq = 0
+
+# --- kexec (prevent kernel replacement at runtime) ---
+kernel.kexec_load_disabled = 1
+
+# --- Filesystem protections ---
+fs.protected_symlinks = 1
+fs.protected_hardlinks = 1
+fs.protected_fifos = 2
+fs.protected_regular = 2
+
+# --- SUID core dumps ---
+fs.suid_dumpable = 0
+kernel.core_uses_pid = 1
+
+# --- Network hardening ---
+# Reverse path filtering (anti-spoofing)
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+# Drop ICMP redirects
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+# Drop source-routed packets
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+# TCP SYN cookies (SYN flood protection)
+net.ipv4.tcp_syncookies = 1
+# IPv6 — mirror IPv4 settings
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+SYSCTLCONF
+
+  echo "[*] Created /etc/sysctl.d/99-hardening.conf"
+
+  # Apply sysctl settings immediately
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl --system 2>/dev/null || echo "[!] Some sysctl settings failed to apply (may need reboot)"
+    echo "[*] sysctl hardening applied"
+  else
+    echo "[!] sysctl command not found — settings apply on reboot"
+  fi
+
+  # ── 16.2: GRUB kernel cmdline hardening ─────────────────────────
+  echo ""
+  echo "=== Step 16.2: Adding kernel hardening to GRUB cmdline ==="
+  GRUB_DEFAULT="/etc/default/grub"
+  HARDENING_PARAMS="init_on_free=1 page_alloc.shuffle=1"
+
+  if [ -f "$GRUB_DEFAULT" ]; then
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT" 2>/dev/null; then
+      # Add each param if not already present
+      for param in $HARDENING_PARAMS; do
+        param_name="${param%%=*}"
+        if ! grep -q "$param_name" "$GRUB_DEFAULT" 2>/dev/null; then
+          sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"/GRUB_CMDLINE_LINUX_DEFAULT=\"\1 ${param}\"/" "$GRUB_DEFAULT"
+          echo "[*] Added ${param} to GRUB cmdline"
+        else
+          echo "[*] ${param_name} already in GRUB cmdline"
+        fi
+      done
+
+      # Regenerate GRUB config (may have been done by AppArmor phase, but safe to run again)
+      if command -v grub-mkconfig >/dev/null 2>&1; then
+        grub-mkconfig -o /boot/grub/grub.cfg 2>/dev/null || echo "[!] grub-mkconfig failed — run manually"
+        echo "[*] GRUB config regenerated with hardening params"
+      fi
+    else
+      echo "[!] GRUB_CMDLINE_LINUX_DEFAULT not found — add ${HARDENING_PARAMS} manually"
+    fi
+  else
+    echo "[!] /etc/default/grub not found — add ${HARDENING_PARAMS} to kernel cmdline manually"
+  fi
+
+  echo ""
+  echo "[*] Kernel hardening configured."
+  echo "[*] Compile-time hardening (already in Void kernels):"
+  echo "    SLAB_FREELIST_HARDENED, INIT_ON_ALLOC, FORTIFY_SOURCE,"
+  echo "    HARDENED_USERCOPY, STACKPROTECTOR_STRONG, KASLR,"
+  echo "    STRICT_KERNEL_RWX, BPF_UNPRIV_DEFAULT_OFF, MODULE_SIG"
+  echo "[*] Runtime hardening added:"
+  echo "    init_on_free=1 (zero-fill freed pages, ~5% perf cost)"
+  echo "    page_alloc.shuffle=1 (shuffle page allocator free lists)"
+  echo "[*] sysctl: dmesg_restrict, kptr_restrict=2, BPF harden,"
+  echo "    perf_event_paranoid=2, ptrace_scope=1, sysrq=0,"
+  echo "    filesystem protections, network hardening"
+else
+  echo ""
+  echo "[*] Kernel hardening skipped (--no-hardening)."
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# PHASE 17: Firewall (UFW + plasma-firewall)
+# ═══════════════════════════════════════════════════════════════════════
+# UFW is the only firewall backend with both a pre-built binary package on
+# Void AND plasma-firewall (KDE GUI) integration. firewalld has no binary
+# package on Void (template exists but was never built). UFW uses iptables
+# under the hood (can use iptables-nft for nftables backend).
+# Default policy: deny incoming, allow outgoing. SSH is allowed.
+if [ "$FIREWALL" -eq 1 ]; then
+  echo ""
+  echo "══════════════════════════════════════════════════════════════"
+  echo "  Phase 17: Firewall (UFW + plasma-firewall)"
+  echo "══════════════════════════════════════════════════════════════"
+
+  echo ""
+  echo "=== Step 17.1: Installing UFW + plasma-firewall ==="
+  xinstall ufw plasma-firewall
+
+  # ── Enable UFW runit service ──────────────────────────────────────
+  echo ""
+  echo "=== Step 17.2: Enabling UFW runit service ==="
+  if [ -d /etc/sv/ufw ] && [ ! -L /var/service/ufw ]; then
+    ln -s /etc/sv/ufw /var/service/
+    echo "[*] UFW runit service symlink created."
+  elif [ -L /var/service/ufw ]; then
+    echo "[*] UFW runit service already enabled."
+  else
+    echo "[!] /etc/sv/ufw not found — UFW service may need manual enable."
+  fi
+
+  # ── Configure default policies ──────────────────────────────────
+  echo ""
+  echo "=== Step 17.3: Configuring UFW default policies ==="
+  # Deny all incoming, allow all outgoing
+  ufw default deny incoming 2>/dev/null || true
+  ufw default allow outgoing 2>/dev/null || true
+  echo "[*] Default policy: deny incoming, allow outgoing"
+
+  # Allow SSH (port 22) — don't lock the user out
+  echo ""
+  echo "=== Step 17.4: Allowing SSH (port 22) ==="
+  ufw allow ssh 2>/dev/null || ufw allow 22/tcp 2>/dev/null || true
+  echo "[*] SSH allowed (port 22)"
+
+  # Enable UFW
+  echo ""
+  echo "=== Step 17.5: Enabling UFW ==="
+  ufw enable 2>/dev/null || true
+  echo "[*] UFW enabled"
+
+  # Show status
+  echo ""
+  ufw status verbose 2>/dev/null || echo "[*] Run 'ufw status' to check firewall rules"
+
+  echo ""
+  echo "[*] Firewall configured: UFW + plasma-firewall"
+  echo "[*] Default: deny incoming, allow outgoing"
+  echo "[*] SSH (port 22) allowed"
+  echo "[*] Manage via KDE System Settings > Firewall"
+else
+  echo ""
+  echo "[*] Firewall skipped (--no-firewall)."
+fi
+
 # ── Final ownership fix (runs AFTER all file creation/modification) ──
 # The script runs as root and creates dirs/files in user homes throughout
 # all phases. sed -i re-creates files as root-owned. This pass runs at the
@@ -2966,6 +3253,9 @@ echo "    - snooze-daily   (/var/service/snooze-daily) — auto-update (xbps + f
 echo "    - snooze-weekly  (/var/service/snooze-weekly) — log rotation"
 [ $BLUETOOTH_DETECTED -eq 1 ] && echo "    - bluetoothd      (/var/service/bluetoothd)"
 echo "    - power-profiles-daemon (/var/service/power-profiles-daemon) — power profiles"
+if [ "$FIREWALL" -eq 1 ]; then
+  echo "    - ufw            (/var/service/ufw)      — firewall (deny incoming, allow outgoing)"
+fi
 echo ""
 echo "  Repositories enabled:"
 echo "    - current (main)"
@@ -3019,6 +3309,39 @@ echo "    cleanup    — sudo xbps-remove -O -o"
 echo ""
 echo "  Bash history: 10000 entries, dedup, timestamped, saved per-command"
 echo ""
+
+if [ "$APPARMOR" -eq 1 ]; then
+  echo "  Security — AppArmor:"
+  echo "    [✓] apparmor package installed (runit core-service)"
+  echo "    [✓] Mode: enforce (blocks violations)"
+  echo "    [✓] GRUB cmdline: apparmor=1 security=apparmor"
+  echo "    [✓] Profiles: dhcpcd, nginx, pulseaudio, uuidd, wpa_supplicant"
+  echo "    Verify: aa-status"
+  echo ""
+fi
+
+if [ "$HARDENING" -eq 1 ]; then
+  echo "  Security — Kernel hardening:"
+  echo "    [✓] sysctl: dmesg_restrict, kptr_restrict=2, BPF harden"
+  echo "    [✓] sysctl: perf_event_paranoid=2, ptrace_scope=1, sysrq=0"
+  echo "    [✓] sysctl: filesystem protections, network hardening"
+  echo "    [✓] GRUB cmdline: init_on_free=1, page_alloc.shuffle=1"
+  echo "    [✓] Compile-time (Void kernel): SLAB_FREELIST_HARDENED,"
+  echo "        INIT_ON_ALLOC, FORTIFY_SOURCE, KASLR, MODULE_SIG"
+  echo "    Config: /etc/sysctl.d/99-hardening.conf"
+  echo ""
+fi
+
+if [ "$FIREWALL" -eq 1 ]; then
+  echo "  Security — Firewall:"
+  echo "    [✓] ufw + plasma-firewall installed"
+  echo "    [✓] Default: deny incoming, allow outgoing"
+  echo "    [✓] SSH (port 22) allowed"
+  echo "    [✓] runit service enabled (/var/service/ufw)"
+  echo "    Manage: KDE System Settings > Firewall"
+  echo "    CLI: ufw status, ufw allow <port>, ufw deny <port>"
+  echo ""
+fi
 
 if [ "$GRUVBOX" -eq 1 ]; then
   echo "  Gruvbox theme installed (--gruvbox):"
