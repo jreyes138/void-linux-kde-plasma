@@ -1389,9 +1389,9 @@ if [ "$GRUVBOX" -eq 1 ]; then
 
       # Extract and install
       mkdir -p /tmp/sddm-gruvbox-extract
-      unzip -q -o "$SDDM_GRUVBOX_ZIP" -d /tmp/sddm-gruvbox-extract/ 2>/dev/null
+      unzip -q -o "$SDDM_GRUVBOX_ZIP" -d /tmp/sddm-gruvbox-extract/ 2>/dev/null || true
       mkdir -p "$SDDM_GRUVBOX_DIR"
-      cp -r /tmp/sddm-gruvbox-extract/sddm-gruvbox/* "$SDDM_GRUVBOX_DIR/" 2>/dev/null
+      cp -r /tmp/sddm-gruvbox-extract/sddm-gruvbox/* "$SDDM_GRUVBOX_DIR/" 2>/dev/null || true
       rm -rf /tmp/sddm-gruvbox-extract "$SDDM_GRUVBOX_ZIP"
 
       if [ -f "$SDDM_GRUVBOX_DIR/metadata.desktop" ]; then
@@ -1499,7 +1499,7 @@ WEZTERM_NIGHTLY_TAR="/tmp/wezterm-nightly.tar.xz"
 WEZTERM_NIGHTLY_URL="https://github.com/wezterm/wezterm/releases/download/nightly/wezterm-nightly.Ubuntu22.04.tar.xz"
 if dl_file "$WEZTERM_NIGHTLY_URL" "$WEZTERM_NIGHTLY_TAR"; then
   mkdir -p /tmp/wezterm-nightly-extract
-  tar -xf "$WEZTERM_NIGHTLY_TAR" -C /tmp/wezterm-nightly-extract/ 2>/dev/null
+  tar -xf "$WEZTERM_NIGHTLY_TAR" -C /tmp/wezterm-nightly-extract/ 2>/dev/null || true
   if [ -f /tmp/wezterm-nightly-extract/wezterm/usr/bin/wezterm ]; then
     cp -r /tmp/wezterm-nightly-extract/wezterm/usr/* /usr/ 2>/dev/null || true
     rm -rf /tmp/wezterm-nightly-extract "$WEZTERM_NIGHTLY_TAR"
@@ -1550,7 +1550,7 @@ for family in $NERD_FONT_FAMILIES; do
   tmpfile="/tmp/nf-${archive}"
   echo "[*] Downloading ${family}..."
   if dl_file "$url" "$tmpfile"; then
-    tar -xf "$tmpfile" -C "$NERD_FONT_DIR" 2>/dev/null
+    tar -xf "$tmpfile" -C "$NERD_FONT_DIR" 2>/dev/null || true
     rm -f "$tmpfile"
     echo "[*] ${family} installed to ${NERD_FONT_DIR}"
   else
@@ -2058,11 +2058,16 @@ if [ "$WAYLAND" -eq 1 ]; then
   echo "    No additional package is needed — Plasma Wayland support is included in kde-plasma."
 fi
 
-# ── Apply Breeze Dark theme ──────────────────────────────────────────
+# ── Apply Breeze Dark theme (only when Gruvbox is disabled) ──────────
 # Pre-configure the Breeze Dark color scheme and look-and-feel so the
 # user gets a dark desktop on first login without needing to manually
 # apply it in System Settings (where the Apply button would fail if
 # .config is root-owned — fixed above).
+# When Gruvbox is enabled (Phase 14), skip this — Phase 14 writes its own
+# kdeglobals with GruvboxPlusDark color scheme and Gruvbox-Plus-Dark icons.
+# If Breeze Dark runs first, it writes LookAndFeelPackage=org.kde.breezedark.desktop
+# which overrides the Gruvbox color scheme on login.
+if [ "$GRUVBOX" -eq 0 ]; then
 echo ""
 echo "[*] Pre-configuring Breeze Dark theme..."
 for user_home in /home/*; do
@@ -2108,6 +2113,7 @@ KDDEFAULTS
 
   echo "[*] Configured Breeze Dark theme for $owner"
 done
+fi # end Breeze Dark (GRUVBOX=0 gate)
 
 # ── Install Gruvbox Plus Dark icons ──────────────────────────────────
 # Gruvbox Plus is an icon pack based on Gruvbox colors, by SylEleuth.
@@ -2141,7 +2147,8 @@ else
 fi
 rm -rf "$GRUVBOX_TMP"
 
-# Update kdeglobals to use Gruvbox-Plus-Dark icons (instead of breeze-dark)
+# Update kdeglobals to use Gruvbox-Plus-Dark icons (only when Gruvbox enabled)
+if [ "$GRUVBOX" -eq 1 ]; then
 for user_home in /home/*; do
   owner=$(stat -c %U "$user_home" 2>/dev/null)
   [ -z "$owner" ] || [ "$owner" = "root" ] && continue
@@ -2156,6 +2163,7 @@ for user_home in /home/*; do
   fi
   echo "[*] Set Gruvbox-Plus-Dark icons for $owner"
 done
+fi
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 13: Flatpak + Flathub + Apps (Brave, Tutanota)
@@ -2390,6 +2398,43 @@ if [ "$GRUVBOX" -eq 1 ]; then
     chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
     echo "[*] Active color scheme: $ACTIVE_SCHEME"
 
+    # Also set LookAndFeelPackage and widgetStyle in kdeglobals
+    # Without this, KDE may apply a default look-and-feel that overrides
+    # the Gruvbox color scheme on login.
+    if grep -q "^\[KDE\]" "$KDEGLOBALS" 2>/dev/null; then
+      if grep -q "^LookAndFeelPackage=" "$KDEGLOBALS" 2>/dev/null; then
+        sed -i 's/^LookAndFeelPackage=.*/LookAndFeelPackage=org.kde.breezedark.desktop/' "$KDEGLOBALS"
+      else
+        sed -i '/^\[KDE\]/a LookAndFeelPackage=org.kde.breezedark.desktop' "$KDEGLOBALS"
+      fi
+      if ! grep -q "^widgetStyle=" "$KDEGLOBALS" 2>/dev/null; then
+        sed -i '/^\[KDE\]/a widgetStyle=Breeze' "$KDEGLOBALS"
+      fi
+    else
+      echo "" >> "$KDEGLOBALS"
+      echo "[KDE]" >> "$KDEGLOBALS"
+      echo "LookAndFeelPackage=org.kde.breezedark.desktop" >> "$KDEGLOBALS"
+      echo "widgetStyle=Breeze" >> "$KDEGLOBALS"
+    fi
+    chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
+
+    # Write kdedefaults/package so KDE knows which look-and-feel to apply
+    KDE_DEFAULTS_DIR="$G_USER_HOME/.config/kdedefaults"
+    mkdir -p "$KDE_DEFAULTS_DIR"
+    echo "org.kde.breezedark.desktop" > "$KDE_DEFAULTS_DIR/package"
+    # Write kdedefaults/kdeglobals with Gruvbox color scheme
+    cat > "$KDE_DEFAULTS_DIR/kdeglobals" << KDEDEFGLOBALS
+[General]
+ColorScheme=$ACTIVE_SCHEME
+
+[Icons]
+Theme=Gruvbox-Plus-Dark
+
+[KDE]
+widgetStyle=Breeze
+KDEDEFGLOBALS
+    chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDE_DEFAULTS_DIR"
+
     # ── 14.2: Icon Pack ─────────────────────────────────────────────
     if [ "$GRUVBOX_ICONS" -eq 1 ]; then
       echo ""
@@ -2426,7 +2471,7 @@ if [ "$GRUVBOX" -eq 1 ]; then
         ICON_ZIP="/tmp/gruvbox-plus-icons.zip"
         if dl_file "$ICON_RELEASE_URL" "$ICON_ZIP"; then
           echo "[*] Downloaded icon pack ($(du -h "$ICON_ZIP" | cut -f1))"
-          unzip -q -o "$ICON_ZIP" -d "$ICONS_DIR/" 2>/dev/null
+          unzip -q -o "$ICON_ZIP" -d "$ICONS_DIR/" 2>/dev/null || true
           rm -f "$ICON_ZIP"
           echo "[*] Icons extracted to $ICONS_DIR/"
         else
