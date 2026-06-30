@@ -2197,10 +2197,13 @@ echo "=== Step 13.2: Adding Flathub remote ==="
 if flatpak remotes 2>/dev/null | grep -q 'flathub'; then
   echo "[*] Flathub remote already exists."
 else
-  flatpak remote-add --if-not-exists flathub \
-    https://dl.flathub.org/repo/flathub.flatpakrepo 2>/dev/null && \
-    echo "[*] Flathub remote added." || \
+  fp_output=$(flatpak remote-add --if-not-exists flathub \
+    https://dl.flathub.org/repo/flathub.flatpakrepo 2>&1 | tr -d '\r') || true
+  if flatpak remotes 2>/dev/null | grep -q 'flathub'; then
+    echo "[*] Flathub remote added."
+  else
     echo "[!] Failed to add Flathub remote. Flatpak apps may not install."
+  fi
 fi
 
 # ── Install xdg-desktop-portal for Flatpak ↔ KDE integration ─────────
@@ -2217,7 +2220,12 @@ echo "=== Step 13.4: Installing Brave Browser ==="
 if flatpak list 2>/dev/null | grep -q 'com.brave.Browser'; then
   echo "[*] Brave Browser already installed."
 else
-  flatpak install -y flathub com.brave.Browser 2>/dev/null && echo "[*] Brave Browser installed." || echo "[!] Brave Browser install failed — try manually: flatpak install flathub com.brave.Browser"
+  fp_output=$(flatpak install -y flathub com.brave.Browser 2>&1 | tr -d '\r') || true
+  if flatpak list 2>/dev/null | grep -q 'com.brave.Browser'; then
+    echo "[*] Brave Browser installed."
+  else
+    echo "[!] Brave Browser install failed — try manually: flatpak install flathub com.brave.Browser"
+  fi
 fi
 
 # ── Install Tutanota (Tuta) ───────────────────────────────────────────
@@ -2229,7 +2237,12 @@ echo "=== Step 13.5: Installing Tutanota (Tuta) ==="
 if flatpak list 2>/dev/null | grep -q 'com.tutanota.Tutanota'; then
   echo "[*] Tutanota already installed."
 else
-  flatpak install -y flathub com.tutanota.Tutanota 2>/dev/null && echo "[*] Tutanota installed." || echo "[!] Tutanota install failed — try manually: flatpak install flathub com.tutanota.Tutanota"
+  fp_output=$(flatpak install -y flathub com.tutanota.Tutanota 2>&1 | tr -d '\r') || true
+  if flatpak list 2>/dev/null | grep -q 'com.tutanota.Tutanota'; then
+    echo "[*] Tutanota installed."
+  else
+    echo "[!] Tutanota install failed — try manually: flatpak install flathub com.tutanota.Tutanota"
+  fi
 fi
 
 # ── Update flatpak desktop database ───────────────────────────────────
