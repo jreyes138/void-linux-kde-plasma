@@ -499,7 +499,7 @@ if [ "$ROOT_FS_TYPE" = "btrfs" ]; then
       FSTAB=/etc/fstab
       if grep -q "^[^#].* / btrfs" "$FSTAB" 2>/dev/null; then
         # Replace the options field for the btrfs root mount only (exact " / " match)
-        sed -i "s|\(^[^#]\S\+\s\+/\s\+btrfs\s\+\)defaults|\1defaults,compress=zstd|" "$FSTAB"
+        sed -i "s|\(^[^#]\S\+\s\+/\s\+btrfs\s\+\)defaults|\1defaults,compress=zstd|" "$FSTAB" 2>/dev/null || true
         echo "[*] Added compress=zstd to fstab for btrfs root."
 
         # Remount to apply immediately
@@ -885,9 +885,9 @@ WPWRAPPER
 
   WP_DESKTOP=/etc/xdg/autostart/wireplumber.desktop
   if [ -f "$WP_DESKTOP" ]; then
-    sed -i 's|^Exec=.*|Exec=/usr/local/bin/wireplumber-autostart|' "$WP_DESKTOP"
+    sed -i 's|^Exec=.*|Exec=/usr/local/bin/wireplumber-autostart|' "$WP_DESKTOP" 2>/dev/null || true
     # Remove any stale X-KDE-Autostart-phase line (it caused early-start issues)
-    sed -i '/X-KDE-Autostart-phase/d' "$WP_DESKTOP"
+    sed -i '/X-KDE-Autostart-phase/d' "$WP_DESKTOP" 2>/dev/null || true
     echo "[*] Updated wireplumber.desktop to use D-Bus wrapper"
   fi
 
@@ -1163,7 +1163,7 @@ fi
 # compression and decompression with similar ratios.
 ZRAMEN_CONF="/etc/sv/zramen/conf"
 if [ -f "$ZRAMEN_CONF" ]; then
-  sed -i 's/^#export ZRAM_COMP_ALGORITHM=lz4/export ZRAM_COMP_ALGORITHM=lz4/' "$ZRAMEN_CONF"
+  sed -i 's/^#export ZRAM_COMP_ALGORITHM=lz4/export ZRAM_COMP_ALGORITHM=lz4/' "$ZRAMEN_CONF" 2>/dev/null || true
   if grep -q '^export ZRAM_COMP_ALGORITHM=lz4' "$ZRAMEN_CONF" 2>/dev/null; then
     echo "[*] zramen: enabled lz4 compression"
   else
@@ -1386,9 +1386,9 @@ SDDMTHEMECONF
   if [ -f "$SDDM_GRUVBOX_DIR/metadata.desktop" ]; then
     if grep -q "^\[Theme\]" "$SDDM_CONF" 2>/dev/null; then
       if grep -q "^Current=" "$SDDM_CONF" 2>/dev/null; then
-        sed -i "s/^Current=.*/Current=sddm-gruvbox/" "$SDDM_CONF"
+        sed -i "s/^Current=.*/Current=sddm-gruvbox/" "$SDDM_CONF" 2>/dev/null || true
       else
-        sed -i "/^\[Theme\]/a Current=sddm-gruvbox" "$SDDM_CONF"
+        sed -i "/^\[Theme\]/a Current=sddm-gruvbox" "$SDDM_CONF" 2>/dev/null || true
       fi
     else
       echo "" >> "$SDDM_CONF"
@@ -1767,7 +1767,7 @@ fi
 USERBASHRC
 
   if [ "$user_home" = "/root" ]; then
-    chown root:root "$user_bashrc"
+    chown root:root "$user_bashrc" 2>/dev/null || true
   else
     owner=$(stat -c %U "$user_home" 2>/dev/null || true)
     [ -n "$owner" ] && chown "$owner":"$owner" "$user_bashrc" 2>/dev/null || true
@@ -1839,7 +1839,7 @@ if [ -f "$WEZTERM_DESKTOP" ]; then
 
     # Remove any existing terminal handler entry
     if [ -f "$usermime" ]; then
-      sed -i '/x-scheme-handler\/terminal/d' "$usermime"
+      sed -i '/x-scheme-handler\/terminal/d' "$usermime" 2>/dev/null || true
     fi
 
     # Add wezterm as the default terminal handler
@@ -1850,7 +1850,7 @@ if [ -f "$WEZTERM_DESKTOP" ]; then
 
     # Set ownership
     if [ "$user_home" = "/root" ]; then
-      chown root:root "$usermime"
+      chown root:root "$usermime" 2>/dev/null || true
     else
       owner=$(stat -c %U "$user_home" 2>/dev/null || true)
       [ -n "$owner" ] && chown "$owner":"$owner" "$usermime" 2>/dev/null || true
@@ -1862,7 +1862,7 @@ if [ -f "$WEZTERM_DESKTOP" ]; then
   SYSMIME=/etc/xdg/mimeapps.list
   mkdir -p "$(dirname "$SYSMIME")"
   if [ -f "$SYSMIME" ]; then
-    sed -i '/x-scheme-handler\/terminal/d' "$SYSMIME"
+    sed -i '/x-scheme-handler\/terminal/d' "$SYSMIME" 2>/dev/null || true
   fi
   if ! grep -q '\[Default Applications\]' "$SYSMIME" 2>/dev/null; then
     echo "[Default Applications]" >> "$SYSMIME"
@@ -1984,7 +1984,7 @@ return {
 WEZTERMCFG
 
   if [ "$user_home" = "/root" ]; then
-    chown -R root:root "$wt_dir"
+    chown -R root:root "$wt_dir" 2>/dev/null || true
   else
     owner=$(stat -c %U "$user_home" 2>/dev/null || true)
     [ -n "$owner" ] && chown -R "$owner":"$owner" "$wt_dir" 2>/dev/null || true
@@ -2019,7 +2019,7 @@ for user_home in /home/*; do
 
   kde_defaults="${user_home}/.config/kdedefaults"
   mkdir -p "$kde_defaults"
-  chown -R "$owner":"$owner" "$kde_defaults"
+  chown -R "$owner":"$owner" "$kde_defaults" 2>/dev/null || true
 
   # Write kdeglobals with BreezeDark color scheme
   cat > "${user_home}/.config/kdeglobals" << 'KDEGLOBALS'
@@ -2035,7 +2035,7 @@ widgetStyle=Breeze
 contrast=4
 frameContrast=0.2
 KDEGLOBALS
-  chown "$owner":"$owner" "${user_home}/.config/kdeglobals"
+  chown "$owner":"$owner" "${user_home}/.config/kdeglobals" 2>/dev/null || true
 
   # Write kdedefaults/kdeglobals
   cat > "${kde_defaults}/kdeglobals" << 'KDDEFAULTS'
@@ -2048,11 +2048,11 @@ Theme=breeze-dark
 [KDE]
 widgetStyle=Breeze
 KDDEFAULTS
-  chown "$owner":"$owner" "${kde_defaults}/kdeglobals"
+  chown "$owner":"$owner" "${kde_defaults}/kdeglobals" 2>/dev/null || true
 
   # Write kdedefaults/package
   echo "org.kde.breezedark.desktop" > "${kde_defaults}/package"
-  chown "$owner":"$owner" "${kde_defaults}/package"
+  chown "$owner":"$owner" "${kde_defaults}/package" 2>/dev/null || true
 
   echo "[*] Configured Breeze Dark theme for $owner"
 done
@@ -2317,7 +2317,7 @@ if [ "$GRUVBOX" -eq 1 ]; then
 
     dl_file "$DARK_URL" "$COLOR_SCHEMES_DIR/GruvboxPlusDark.colors" && echo "[*] Downloaded GruvboxPlusDark.colors" || echo "[!] Failed to download dark color scheme"
     dl_file "$LIGHT_URL" "$COLOR_SCHEMES_DIR/GruvboxPlusLight.colors" && echo "[*] Downloaded GruvboxPlusLight.colors" || echo "[!] Failed to download light color scheme"
-    chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$COLOR_SCHEMES_DIR"
+    chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$COLOR_SCHEMES_DIR" 2>/dev/null || true
 
     ACTIVE_SCHEME="GruvboxPlus Dark"
     [ "$GRUVBOX_VARIANT" = "light" ] && ACTIVE_SCHEME="GruvboxPlus Light"
@@ -2329,16 +2329,16 @@ if [ "$GRUVBOX" -eq 1 ]; then
     touch "$KDEGLOBALS"
     if grep -q "^\[General\]" "$KDEGLOBALS" 2>/dev/null; then
       if grep -q "^ColorScheme=" "$KDEGLOBALS" 2>/dev/null; then
-        sed -i "s/^ColorScheme=.*/ColorScheme=$ACTIVE_SCHEME/" "$KDEGLOBALS"
+        sed -i "s/^ColorScheme=.*/ColorScheme=$ACTIVE_SCHEME/" "$KDEGLOBALS" 2>/dev/null || true
       else
-        sed -i "/^\[General\]/a ColorScheme=$ACTIVE_SCHEME" "$KDEGLOBALS"
+        sed -i "/^\[General\]/a ColorScheme=$ACTIVE_SCHEME" "$KDEGLOBALS" 2>/dev/null || true
       fi
     else
       echo "" >> "$KDEGLOBALS"
       echo "[General]" >> "$KDEGLOBALS"
       echo "ColorScheme=$ACTIVE_SCHEME" >> "$KDEGLOBALS"
     fi
-    chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
+    chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS" 2>/dev/null || true
     echo "[*] Active color scheme: $ACTIVE_SCHEME"
 
     # Set widgetStyle and LookAndFeelPackage in kdeglobals.
@@ -2365,7 +2365,7 @@ if [ "$GRUVBOX" -eq 1 ]; then
       echo "widgetStyle=Breeze" >> "$KDEGLOBALS"
       echo "LookAndFeelPackage=org.kde.breezedark.desktop" >> "$KDEGLOBALS"
     fi
-    chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
+    chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS" 2>/dev/null || true
 
     # Write kdedefaults with Breeze Dark look-and-feel as base
     KDE_DEFAULTS_DIR="$G_USER_HOME/.config/kdedefaults"
@@ -2384,7 +2384,7 @@ Theme=$ICON_THEME_DEFAULT
 [KDE]
 widgetStyle=Breeze
 KDEDEFGLOBALS
-    chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDE_DEFAULTS_DIR"
+    chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDE_DEFAULTS_DIR" 2>/dev/null || true
 
     # ── 14.1b: First-login autostart to apply Gruvbox color scheme ─────
     # Breeze Dark look-and-feel applies on first login (via kdedefaults/package),
@@ -2475,8 +2475,8 @@ THEMEDESKTOP
           echo "[Icons]" >> "$KDEGLOBALS"
           echo "Theme=$ICON_THEME" >> "$KDEGLOBALS"
         fi
-        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$ICONS_DIR"
-        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$ICONS_DIR" 2>/dev/null || true
+        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS" 2>/dev/null || true
         echo "[*] Active icon theme: $ICON_THEME"
       fi
     fi
@@ -2505,7 +2505,7 @@ THEMEDESKTOP
       fi
 
       if [ "$GRUVBOX_KVANTUM" -eq 1 ]; then
-        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$KVANTUM_THEMES_DIR"
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$KVANTUM_THEMES_DIR" 2>/dev/null || true
 
         ENV_FILE="$G_USER_HOME/.config/environment.d/gruvbox.conf"
         mkdir -p "$G_USER_HOME/.config/environment.d"
@@ -2513,7 +2513,7 @@ THEMEDESKTOP
 # Gruvbox theme — set Kvantum as the Qt style engine
 QT_QPA_PLATFORMTHEME=kvantum
 ENVEOF
-        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/environment.d"
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/environment.d" 2>/dev/null || true
 
         KVANTUM_CONF="$G_USER_HOME/.config/Kvantum/kvantum.kvconfig"
         if [ ! -f "$KVANTUM_CONF" ] || ! grep -q "^\[General\]" "$KVANTUM_CONF" 2>/dev/null; then
@@ -2523,12 +2523,12 @@ theme=gruvbox-kvantum
 KVCONFEOF
         else
           if grep -q "^theme=" "$KVANTUM_CONF" 2>/dev/null; then
-            sed -i "s/^theme=.*/theme=gruvbox-kvantum/" "$KVANTUM_CONF"
+            sed -i "s/^theme=.*/theme=gruvbox-kvantum/" "$KVANTUM_CONF" 2>/dev/null || true
           else
-            sed -i "/^\[General\]/a theme=gruvbox-kvantum" "$KVANTUM_CONF"
+            sed -i "/^\[General\]/a theme=gruvbox-kvantum" "$KVANTUM_CONF" 2>/dev/null || true
           fi
         fi
-        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KVANTUM_CONF"
+        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KVANTUM_CONF" 2>/dev/null || true
         echo "[*] Kvantum theme 'gruvbox-kvantum' installed and configured"
       fi
     fi
@@ -2755,7 +2755,7 @@ FFCONFIG
 \___)=(___/
 LOGOEOF
 
-      chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$FF_DIR"
+      chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$FF_DIR" 2>/dev/null || true
 
       BASHRC="$G_USER_HOME/.bashrc"
       if [ -f "$BASHRC" ]; then
@@ -2765,7 +2765,7 @@ LOGOEOF
           echo "if command -v fastfetch >/dev/null 2>&1 && [ -t 1 ]; then" >> "$BASHRC"
           echo "    fastfetch" >> "$BASHRC"
           echo "fi" >> "$BASHRC"
-          chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$BASHRC"
+          chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$BASHRC" 2>/dev/null || true
           echo "[*] Added fastfetch to .bashrc"
         else
           echo "[*] fastfetch already in .bashrc"
@@ -2777,7 +2777,7 @@ if command -v fastfetch >/dev/null 2>&1 && [ -t 1 ]; then
     fastfetch
 fi
 BASHRCEOF
-        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$BASHRC"
+        chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$BASHRC" 2>/dev/null || true
         echo "[*] Created .bashrc with fastfetch"
       fi
       echo "[*] Fastfetch installed with gruvbox config"
@@ -2795,7 +2795,7 @@ BASHRCEOF
         WP_FILE="$WP_DIR/$(basename "$GRUVBOX_WALLPAPER_PATH")"
         echo "[*] Copying wallpaper to $WP_FILE..."
         cp "$GRUVBOX_WALLPAPER_PATH" "$WP_FILE"
-        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR"
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR" 2>/dev/null || true
         echo "[*] Wallpaper copied ($(du -h "$WP_FILE" 2>/dev/null | cut -f1 || echo '?'))"
       elif [ -n "$GRUVBOX_WALLPAPER_PATH" ] && [ ! -f "$GRUVBOX_WALLPAPER_PATH" ]; then
         echo "[!] Wallpaper file not found: $GRUVBOX_WALLPAPER_PATH"
@@ -2804,7 +2804,7 @@ BASHRCEOF
         WP_FILE="$WP_DIR/$GRUVBOX_WALLPAPER_FILENAME"
         echo "[*] Downloading wallpaper from $GRUVBOX_WALLPAPER_URL..."
         if dl_file "$GRUVBOX_WALLPAPER_URL" "$WP_FILE"; then
-          chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR"
+          chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR" 2>/dev/null || true
           echo "[*] Wallpaper downloaded ($(du -h "$WP_FILE" 2>/dev/null | cut -f1 || echo '?'))"
         else
           echo "[!] Failed to download wallpaper. Skipping."
@@ -2830,13 +2830,13 @@ BASHRCEOF
 [Desktop Entry]
 Type=Application
 Name=Apply Gruvbox Wallpaper
-Exec=bash -c 'sleep 3 && plasma-apply-wallpaperimage "WP_FILE_PLACEHOLDER" 2>/dev/null; rm -f "$HOME/.config/autostart/apply-gruvbox-wallpaper.desktop"; rm -f "$HOME/.local/bin/apply-gruvbox-wallpaper.sh"'
+Exec=bash -c 'sleep 3 && plasma-apply-wallpaperimage "WP_FILE_PLACEHOLDER" 2>/dev/null; rm -f "$HOME/.config/autostart/apply-gruvbox-wallpaper.desktop"'
 Icon=preferences-desktop-wallpaper
 Terminal=false
 X-KDE-autostart-condition=plasmashell
 OnlyShowIn=KDE
 WPDESKTOP
-        sed -i "s|WP_FILE_PLACEHOLDER|$WP_FILE|" "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop"
+        sed -i "s|WP_FILE_PLACEHOLDER|$WP_FILE|" "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop" 2>/dev/null || true
 
         chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/autostart" 2>/dev/null || true
 
@@ -2874,7 +2874,7 @@ if [ "$APPARMOR" -eq 1 ]; then
   echo "=== Step 15.2: Configuring AppArmor enforce mode ==="
   if [ -f /etc/default/apparmor ]; then
     if grep -q '^APPARMOR=' /etc/default/apparmor 2>/dev/null; then
-      sed -i 's/^APPARMOR=.*/APPARMOR=enforce/' /etc/default/apparmor
+      sed -i 's/^APPARMOR=.*/APPARMOR=enforce/' /etc/default/apparmor 2>/dev/null || true
     else
       echo "APPARMOR=enforce" >> /etc/default/apparmor
     fi
@@ -2890,7 +2890,7 @@ if [ "$APPARMOR" -eq 1 ]; then
   if [ -f "$GRUB_DEFAULT" ]; then
     if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT" 2>/dev/null; then
       if ! grep -q 'apparmor=1' "$GRUB_DEFAULT" 2>/dev/null; then
-        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=1 security=apparmor"/' "$GRUB_DEFAULT"
+        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 apparmor=1 security=apparmor"/' "$GRUB_DEFAULT" 2>/dev/null || true
         echo "[*] Added apparmor=1 security=apparmor to GRUB_CMDLINE_LINUX_DEFAULT"
       else
         echo "[*] apparmor=1 already in GRUB cmdline"
@@ -3029,7 +3029,7 @@ SYSCTLCONF
       for param in $HARDENING_PARAMS; do
         param_name="${param%%=*}"
         if ! grep -q "$param_name" "$GRUB_DEFAULT" 2>/dev/null; then
-          sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"/GRUB_CMDLINE_LINUX_DEFAULT=\"\1 ${param}\"/" "$GRUB_DEFAULT"
+          sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"/GRUB_CMDLINE_LINUX_DEFAULT=\"\1 ${param}\"/" "$GRUB_DEFAULT" 2>/dev/null || true
           echo "[*] Added ${param} to GRUB cmdline"
         else
           echo "[*] ${param_name} already in GRUB cmdline"
@@ -3082,6 +3082,7 @@ if [ "$FIREWALL" -eq 1 ]; then
   echo ""
   echo "=== Step 17.1: Installing UFW + plasma-firewall ==="
   xinstall ufw plasma-firewall
+  hash -r  # refresh command hash so ufw is found in PATH immediately
 
   # ── Enable UFW runit service ──────────────────────────────────────
   echo ""
