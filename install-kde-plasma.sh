@@ -1108,7 +1108,7 @@ else
   echo "[*] No Bluetooth detected. Skipping bluez."
 fi
 
-# ── Power management (bare metal only) ────────────────────────────────
+# ── Power management ─────────────────────────────────────────────────
 # powerdevil: KDE's power management daemon — battery, brightness,
 #   suspend/hibernate, lid switch handling. Integrates with Plasma's
 #   battery widget and system settings.
@@ -1119,26 +1119,23 @@ fi
 #   both powerdevil and power-profiles-daemon, installed automatically.
 # acpid conflicts with elogind for lid-switch/power-button handling.
 #   elogind handles these natively, so we do NOT install acpid.
-# VMs don't need power management — skip entirely.
-if [ "$VIRT_PLATFORM" = "none" ]; then
-  echo ""
-  echo "=== Step 8.3: Power management (bare metal) ==="
-  xinstall powerdevil power-profiles-daemon upower
+# Installed on all systems — VMs benefit from power-profiles-daemon for
+# CPU frequency scaling, and powerdevil provides brightness control for
+# virtual displays. No harm if no battery is present.
+echo ""
+echo "=== Step 8.3: Power management ==="
+xinstall powerdevil power-profiles-daemon upower
 
-  # Enable power-profiles-daemon runit service
-  # powerdevil runs as a KDE Plasma component (no runit service needed)
-  if [ -d /etc/sv/power-profiles-daemon ] && [ ! -L /var/service/power-profiles-daemon ]; then
-    ln -s /etc/sv/power-profiles-daemon /var/service/
-    echo "[*] power-profiles-daemon symlink created."
-  elif [ -L /var/service/power-profiles-daemon ]; then
-    echo "[*] power-profiles-daemon already enabled."
-  fi
-  echo "[*] Power management installed: powerdevil + power-profiles-daemon"
-  echo "[*] Battery widget, brightness, suspend/hibernate available in Plasma."
-else
-  echo ""
-  echo "=== Step 8.3: Power management skipped (VM: $VIRT_PLATFORM) ==="
+# Enable power-profiles-daemon runit service
+# powerdevil runs as a KDE Plasma component (no runit service needed)
+if [ -d /etc/sv/power-profiles-daemon ] && [ ! -L /var/service/power-profiles-daemon ]; then
+  ln -s /etc/sv/power-profiles-daemon /var/service/
+  echo "[*] power-profiles-daemon symlink created."
+elif [ -L /var/service/power-profiles-daemon ]; then
+  echo "[*] power-profiles-daemon already enabled."
 fi
+echo "[*] Power management installed: powerdevil + power-profiles-daemon"
+echo "[*] Battery widget, brightness, suspend/hibernate available in Plasma."
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 9: VM guest tools (if running in a VM)
@@ -1515,11 +1512,13 @@ else
 fi
 
 # ── Install Nerd Fonts + base fonts ──────────────────────────────────
-# nerd-fonts-symbols-ttf (5MB) provides the icon glyphs that eza --icons
-# needs. The full nerd-fonts-ttf (7GB) includes all patched font families
-# (Hack, FiraCode, JetBrains Mono, etc.) for use as terminal fonts.
-# Base fonts: dejavu (default sans/mono), noto (multi-language), noto-cjk
-# (CJK), noto-emoji (emoji support — important for modern desktop).
+# nerd-fonts-symbols-ttf (2MB) provides the icon glyphs that eza --icons
+# needs. Instead of the full nerd-fonts-ttf (1.42GB), we download only the
+# 4 font families we want from the Nerd Fonts GitHub releases (~13MB total):
+#   CaskaydiaMono, FiraCode, JetBrainsMono, RobotoMono
+# RobotoMono is set as the default monospace font system-wide via fontconfig.
+# Base fonts: dejavu (default sans/mono fallback), noto (multi-language),
+# noto-cjk (CJK), noto-emoji (emoji support — important for modern desktop).
 echo ""
 echo "=== Step 12.2: Installing fonts ==="
 xinstall nerd-fonts-symbols-ttf dejavu-fonts-ttf noto-fonts-ttf noto-fonts-emoji
@@ -1530,15 +1529,31 @@ else
   echo "[*] VM detected — skipping noto-fonts-cjk (large). Install manually if needed."
 fi
 
-# Full font collection is optional — 7GB. Install if not on a constrained VM.
-if [ "$VIRT_PLATFORM" = "none" ]; then
-  echo "[*] Bare metal detected — installing full nerd-fonts-ttf (7GB)..."
-  xinstall nerd-fonts-ttf
-else
-  echo "[*] VM detected ($VIRT_PLATFORM) — skipping full nerd-fonts-ttf (7GB)."
-  echo "    Symbols-only font installed. To get full patched fonts later:"
-  echo "    xbps-install nerd-fonts-ttf"
-fi
+# ── Download individual Nerd Fonts from GitHub releases ───────────────
+# Void only ships the full 1.42GB nerd-fonts-ttf collection — no per-family
+# packages. We download only the 4 families we need as .tar.xz from the
+# Nerd Fonts release page. Each archive is 2-5MB.
+NERD_FONT_VERSION="3.4.0"
+NERD_FONT_BASE_URL="https://github.com/ryanoasis/nerd-fonts/releases/download/v${NERD_FONT_VERSION}"
+NERD_FONT_DIR="/usr/share/fonts/nerd-fonts"
+NERD_FONT_FAMILIES="CaskaydiaMono FiraCode JetBrainsMono RobotoMono"
+
+mkdir -p "$NERD_FONT_DIR"
+echo "[*] Downloading individual Nerd Fonts (v${NERD_FONT_VERSION})..."
+
+for family in $NERD_FONT_FAMILIES; do
+  archive="${family}.tar.xz"
+  url="${NERD_FONT_BASE_URL}/${archive}"
+  tmpfile="/tmp/nf-${archive}"
+  echo "[*] Downloading ${family}..."
+  if dl_file "$url" "$tmpfile"; then
+    tar -xf "$tmpfile" -C "$NERD_FONT_DIR" 2>/dev/null
+    rm -f "$tmpfile"
+    echo "[*] ${family} installed to ${NERD_FONT_DIR}"
+  else
+    echo "[!] Failed to download ${family} — skipping. Install manually if needed."
+  fi
+done
 
 # Rebuild font cache so the new fonts are immediately available
 echo "[*] Rebuilding font cache..."
@@ -1546,6 +1561,40 @@ fc-cache -f 2>/dev/null || echo "[!] fc-cache not found — font cache not rebui
 
 # Reconfigure fontconfig to pick up new font config files (handbook recommended)
 xbps-reconfigure -f fontconfig 2>/dev/null || true
+
+# ── Set RobotoMono as default monospace font system-wide ─────────────
+# Create a fontconfig prefer config so RobotoMono Nerd Font is the preferred
+# monospace font everywhere — terminal emulators, KDE, Qt apps, etc.
+echo "[*] Setting RobotoMono Nerd Font as default monospace system-wide..."
+mkdir -p /etc/fonts/conf.d
+cat > /etc/fonts/conf.d/99-nerd-font-mono.conf << 'FONTCONF'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <!-- Prefer RobotoMono Nerd Font as the default monospace font -->
+  <match target="pattern">
+    <test name="family">
+      <string>monospace</string>
+    </test>
+    <edit name="family" mode="prepend" binding="strong">
+      <string>RobotoMono Nerd Font</string>
+      <string>RobotoMono Nerd Font Mono</string>
+    </edit>
+  </match>
+  <!-- Also prefer it for the generic "monospace" alias -->
+  <match target="pattern">
+    <test name="family">
+      <string>monospace</string>
+    </test>
+    <edit name="family" mode="append" binding="weak">
+      <string>DejaVu Sans Mono</string>
+    </edit>
+  </match>
+</fontconfig>
+FONTCONF
+
+# Rebuild cache again after adding the fontconfig drop-in
+fc-cache -f 2>/dev/null || true
 
 # ── Configure bash for all users ─────────────────────────────────────
 # Write /etc/bashrc.d/void-enhancements.sh — sourced by /etc/bashrc
@@ -1793,14 +1842,22 @@ fi
 # ── Nerd Font verification ───────────────────────────────────────────
 echo ""
 echo "=== Step 12.6: Verifying Nerd Fonts ==="
-if fc-list 2>/dev/null | grep -qi 'nerd'; then
-  echo "[*] Nerd Font symbols detected by fontconfig."
+if fc-list 2>/dev/null | grep -qi 'RobotoMono Nerd Font'; then
+  echo "[*] RobotoMono Nerd Font detected by fontconfig (default monospace)."
   echo "[*] eza --icons will display file-type icons in the terminal."
-  echo "[*] Set a Nerd Font (e.g. 'Hack Nerd Font') in your terminal"
-  echo "    emulator for full icon support including powerline glyphs."
+  echo "[*] WezTerm configured to use RobotoMono Nerd Font."
 else
-  echo "[!] Nerd Font not detected by fontconfig."
-  echo "[!] Run: sudo fc-cache -f && fc-list | grep -i nerd"
+  echo "[!] RobotoMono Nerd Font not detected by fontconfig."
+  echo "[!] Run: sudo fc-cache -f && fc-list | grep -i robotomono"
+fi
+if fc-list 2>/dev/null | grep -qi 'CaskaydiaMono Nerd Font'; then
+  echo "[*] CaskaydiaMono Nerd Font detected."
+fi
+if fc-list 2>/dev/null | grep -qi 'FiraCode Nerd Font'; then
+  echo "[*] FiraCode Nerd Font detected."
+fi
+if fc-list 2>/dev/null | grep -qi 'JetBrainsMono Nerd Font'; then
+  echo "[*] JetBrainsMono Nerd Font detected."
 fi
 
 echo ""
@@ -1908,8 +1965,9 @@ end)
 return {
   -- ── Font ──────────────────────────────────────────────────────────────
   font = wezterm.font_with_fallback {
-    { family = "DejaVu Sans Mono", scale = 1.0 },
+    { family = "RobotoMono Nerd Font", scale = 1.0 },
     { family = "Symbols Nerd Font Mono", scale = 1.0 },
+    { family = "DejaVu Sans Mono", scale = 1.0 },
   },
   font_size = 12.0,
   line_height = 1.1,
@@ -2859,9 +2917,7 @@ echo "    - NetworkManager (/var/service/NetworkManager)"
 echo "    - snooze-daily   (/var/service/snooze-daily) — auto-update (xbps + flatpak)"
 echo "    - snooze-weekly  (/var/service/snooze-weekly) — log rotation"
 [ $BLUETOOTH_DETECTED -eq 1 ] && echo "    - bluetoothd      (/var/service/bluetoothd)"
-if [ "$VIRT_PLATFORM" = "none" ]; then
-  echo "    - power-profiles-daemon (/var/service/power-profiles-daemon) — power profiles"
-fi
+echo "    - power-profiles-daemon (/var/service/power-profiles-daemon) — power profiles"
 echo ""
 echo "  Repositories enabled:"
 echo "    - current (main)"
@@ -2886,9 +2942,8 @@ echo "    bash-completion — tab completion for commands"
 echo "    wezterm  — GPU-accelerated terminal emulator (set as default)"
 echo "               Gruvbox Dark theme, 85% opacity, Nerd Font icons"
 echo "    nerd-fonts-symbols-ttf — icon glyphs for eza --icons"
-if [ "$VIRT_PLATFORM" = "none" ]; then
-  echo "    nerd-fonts-ttf — full patched font families (Hack, FiraCode, etc.)"
-fi
+echo "    Nerd Fonts (individual): CaskaydiaMono, FiraCode, JetBrainsMono,"
+echo "                             RobotoMono (default monospace system-wide)"
 echo ""
 echo "  Flatpak apps (installed via Flathub):"
 echo "    flatpak   — Flatpak runtime, Flathub remote configured"

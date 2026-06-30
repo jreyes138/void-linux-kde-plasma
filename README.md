@@ -118,7 +118,8 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 - bat (cat replacement), micro (editor, nano aliased to it), eza (ls replacement)
 - git, wget, curl, bash-completion
 - wezterm (GPU-accelerated terminal, set as default)
-- nerd-fonts-symbols-ttf, dejavu-fonts-ttf, noto-fonts-ttf, noto-fonts-emoji
+- Nerd Fonts: CaskaydiaMono, FiraCode, JetBrainsMono, RobotoMono (default monospace system-wide)
+- dejavu-fonts-ttf, noto-fonts-ttf, noto-fonts-emoji
 
 ### Themes
 - Breeze Dark color scheme + look-and-feel (pre-configured)
