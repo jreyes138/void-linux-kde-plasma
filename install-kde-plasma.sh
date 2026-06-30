@@ -2813,7 +2813,7 @@ OnlyShowIn=KDE
 WPDESKTOP
         sed -i "s|WP_FILE_PLACEHOLDER|$WP_FILE|" "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop"
 
-        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/autostart" "$G_USER_HOME/.local/bin"
+        chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/autostart" 2>/dev/null || true
 
         echo "[*] Wallpaper saved to $WP_FILE"
         echo "[*] Wallpaper will be applied on first login via autostart script"
