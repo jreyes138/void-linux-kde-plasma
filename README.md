@@ -1,35 +1,18 @@
 # Void Linux KDE Plasma Installer
 
-Two-script pipeline for a full Void Linux + KDE Plasma 6 desktop with Gruvbox theming.
+Single-script installer for a full Void Linux + KDE Plasma 6 desktop with Gruvbox theming.
 
-1. **install-void-base.sh** — partitions disk, creates btrfs subvolumes, bootstraps base-system via XBPS chroot method, installs GRUB, nonfree repos, reboots
-2. **install-kde-plasma.sh** — installs KDE Plasma 6, Gruvbox theme, audio, network, CLI tools, Flatpak apps on top of the base
+**install-kde-plasma.sh** — installs KDE Plasma 6, Gruvbox theme, audio, network, CLI tools, Flatpak apps on top of an existing Void Linux base install.
 
-## Two-script installation workflow
+## Prerequisites
 
-### Step 1: Base system (install-void-base.sh)
+Boot a Void Linux live image and install the base system manually (partition, create filesystems, mount, `xbps-install base-system`, configure hostname/locale, install GRUB, set up a user account). Reboot into the new system before running this script.
 
-Boot a Void live image, then run:
+Alternatively, use any existing Void Linux installation (including the live image itself with persistence).
 
-```sh
-# Basic install — btrfs with @ and @home subvolumes, mainline kernel
-sudo bash install-void-base.sh --disk /dev/sda --hostname voidbox
+## Installation
 
-# With a user account
-sudo bash install-void-base.sh --disk /dev/nvme0n1 --hostname laptop --user lenier
-
-# ext4 instead of btrfs
-sudo bash install-void-base.sh --disk /dev/sda --hostname voidbox --fs ext4
-
-# Stock kernel instead of mainline
-sudo bash install-void-base.sh --disk /dev/sda --hostname voidbox --kernel stock
-```
-
-This partitions the disk (UEFI or BIOS auto-detected), creates btrfs subvolumes (@ and @home with zstd compression), installs base-system via XBPS, installs GRUB, enables nonfree/multilib repos, and reboots.
-
-### Step 2: Desktop (install-kde-plasma.sh)
-
-After reboot, log in as root (or your wheel user), download the script, and run:
+After booting into your Void Linux base system, log in as root (or your wheel user), download the script, and run:
 
 ```sh
 curl -O https://raw.githubusercontent.com/jreyes138/void-linux-kde-plasma/main/install-kde-plasma.sh
@@ -80,26 +63,6 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 
 ## Flags
 
-### install-void-base.sh
-
-| Flag | Description |
-|------|-------------|
-| `--disk /dev/sdX` | Target disk (required, e.g. /dev/sda or /dev/nvme0n1) |
-| `--hostname NAME` | System hostname (required) |
-| `--fs btrfs` | Filesystem: btrfs (default) or ext4 |
-| `--keymap us` | Console keyboard layout (default: us) |
-| `--locale en_US.UTF-8` | System locale (default: en_US.UTF-8, glibc only) |
-| `--kernel mainline` | Kernel: mainline (default) or stock |
-| `--user NAME` | Create user account with wheel + sudo |
-| `--password-stdin` | Read root password from stdin (for scripting) |
-| `--no-nonfree` | Skip nonfree/multilib repo enablement |
-| `--no-reboot` | Don't reboot at the end |
-| `--repo URL` | XBPS repository URL (default: https://repo-default.voidlinux.org/current) |
-| `--arch x86_64` | Target architecture (default: auto-detect) |
-| `--yes` | Skip confirmation prompt (for automation) |
-
-### install-kde-plasma.sh
-
 | Flag | Description |
 |------|-------------|
 | `--minimal` | Use xorg-minimal instead of full xorg |
@@ -114,8 +77,7 @@ sudo bash install-kde-plasma.sh --no-reboot --autologin joser --no-flatpak
 
 ## Requirements
 
-- Void Linux live image (for Step 1: install-void-base.sh)
-- Fresh Void Linux base install (for Step 2: install-kde-plasma.sh)
+- Void Linux base installation (existing or freshly installed)
 - Root access (sudo)
 - Internet connection
 
