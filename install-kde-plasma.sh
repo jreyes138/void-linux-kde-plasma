@@ -1394,7 +1394,7 @@ if [ "$GRUVBOX" -eq 1 ]; then
   else
     echo "[*] Downloading sddm-gruvbox v1.1.0..."
     if dl_file "https://github.com/he1senbrg/sddm-gruvbox/releases/download/v1.1.0/sddm-gruvbox.zip" "$SDDM_GRUVBOX_ZIP"; then
-      echo "[*] Downloaded sddm-gruvbox.zip ($(du -h "$SDDM_GRUVBOX_ZIP" | cut -f1))"
+      echo "[*] Downloaded sddm-gruvbox.zip ($(du -h "$SDDM_GRUVBOX_ZIP" 2>/dev/null | cut -f1 || echo '?'))"
 
       # Extract and install
       mkdir -p /tmp/sddm-gruvbox-extract
@@ -1835,7 +1835,7 @@ USERBASHRC
   if [ "$user_home" = "/root" ]; then
     chown root:root "$user_bashrc"
   else
-    owner=$(stat -c %U "$user_home" 2>/dev/null)
+    owner=$(stat -c %U "$user_home" 2>/dev/null || true)
     [ -n "$owner" ] && chown "$owner":"$owner" "$user_bashrc" 2>/dev/null || true
   fi
   chmod 644 "$user_bashrc"
@@ -1918,8 +1918,8 @@ if [ -f "$WEZTERM_DESKTOP" ]; then
     if [ "$user_home" = "/root" ]; then
       chown root:root "$usermime"
     else
-      owner=$(stat -c %U "$user_home" 2>/dev/null)
-      [ -n "$owner" ] && chown "$owner":"$owner" "$usermime"
+      owner=$(stat -c %U "$user_home" 2>/dev/null || true)
+      [ -n "$owner" ] && chown "$owner":"$owner" "$usermime" 2>/dev/null || true
     fi
     echo "[*] Set wezterm as default terminal for $(basename "$user_home")"
   done
@@ -2052,7 +2052,7 @@ WEZTERMCFG
   if [ "$user_home" = "/root" ]; then
     chown -R root:root "$wt_dir"
   else
-    owner=$(stat -c %U "$user_home" 2>/dev/null)
+    owner=$(stat -c %U "$user_home" 2>/dev/null || true)
     [ -n "$owner" ] && chown -R "$owner":"$owner" "$wt_dir" 2>/dev/null || true
   fi
   echo "[*] Created $wt_file"
@@ -2080,7 +2080,7 @@ if [ "$GRUVBOX" -eq 0 ]; then
 echo ""
 echo "[*] Pre-configuring Breeze Dark theme..."
 for user_home in /home/*; do
-  owner=$(stat -c %U "$user_home" 2>/dev/null)
+  owner=$(stat -c %U "$user_home" 2>/dev/null || true)
   [ -z "$owner" ] || [ "$owner" = "root" ] && continue
 
   kde_defaults="${user_home}/.config/kdedefaults"
@@ -2156,23 +2156,10 @@ else
 fi
 rm -rf "$GRUVBOX_TMP"
 
-# Update kdeglobals to use Gruvbox-Plus-Dark icons (only when Gruvbox enabled)
-if [ "$GRUVBOX" -eq 1 ]; then
-for user_home in /home/*; do
-  owner=$(stat -c %U "$user_home" 2>/dev/null)
-  [ -z "$owner" ] || [ "$owner" = "root" ] && continue
-
-  # Update kdeglobals Icons theme
-  if [ -f "${user_home}/.config/kdeglobals" ]; then
-    sed -i 's/^Theme=breeze-dark/Theme=Gruvbox-Plus-Dark/' "${user_home}/.config/kdeglobals"
-  fi
-  # Update kdedefaults/kdeglobals Icons theme
-  if [ -f "${user_home}/.config/kdedefaults/kdeglobals" ]; then
-    sed -i 's/^Theme=breeze-dark/Theme=Gruvbox-Plus-Dark/' "${user_home}/.config/kdedefaults/kdeglobals"
-  fi
-  echo "[*] Set Gruvbox-Plus-Dark icons for $owner"
-done
-fi
+# (Dead code removed — the Breeze Dark sed replacements for Theme=breeze-dark
+#  can never match when GRUVBOX=1 because the Breeze Dark section is gated
+#  behind GRUVBOX=0. Phase 14.2 handles icon theme setting correctly with
+#  proper variant support.)
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 13: Flatpak + Flathub + Apps (Brave, Tutanota)
@@ -2380,7 +2367,7 @@ if [ "$GRUVBOX" -eq 1 ]; then
     echo "[!] No user found for Gruvbox theme. Skipping."
     GRUVBOX=0
   else
-    G_USER_HOME=$(getent passwd "$GRUVBOX_USER" | cut -d: -f6)
+    G_USER_HOME=$(getent passwd "$GRUVBOX_USER" 2>/dev/null | cut -d: -f6 || true)
     echo "[*] Target user: $GRUVBOX_USER ($G_USER_HOME)"
     echo "[*] Variant: $GRUVBOX_VARIANT"
     echo "[*] Options: icons=$GRUVBOX_ICONS kvantum=$GRUVBOX_KVANTUM fastfetch=$GRUVBOX_FASTFETCH wallpaper=$GRUVBOX_WALLPAPER"
@@ -2420,37 +2407,42 @@ if [ "$GRUVBOX" -eq 1 ]; then
     chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
     echo "[*] Active color scheme: $ACTIVE_SCHEME"
 
-    # Also set LookAndFeelPackage and widgetStyle in kdeglobals
-    # Without this, KDE may apply a default look-and-feel that overrides
-    # the Gruvbox color scheme on login.
+    # Set widgetStyle in kdeglobals (Breeze widget style works with Gruvbox colors).
+    # Do NOT set LookAndFeelPackage — that triggers KDE to apply a full look-and-feel
+    # package (e.g. Breeze Dark) which overrides the color scheme and icon theme we
+    # just set. By leaving LookAndFeelPackage unset, KDE reads ColorScheme and Theme
+    # directly from kdeglobals/kdedefaults.
     if grep -q "^\[KDE\]" "$KDEGLOBALS" 2>/dev/null; then
-      if grep -q "^LookAndFeelPackage=" "$KDEGLOBALS" 2>/dev/null; then
-        sed -i 's/^LookAndFeelPackage=.*/LookAndFeelPackage=org.kde.breezedark.desktop/' "$KDEGLOBALS"
-      else
-        sed -i '/^\[KDE\]/a LookAndFeelPackage=org.kde.breezedark.desktop' "$KDEGLOBALS"
-      fi
       if ! grep -q "^widgetStyle=" "$KDEGLOBALS" 2>/dev/null; then
-        sed -i '/^\[KDE\]/a widgetStyle=Breeze' "$KDEGLOBALS"
+        sed -i '/^\[KDE\]/a widgetStyle=Breeze' "$KDEGLOBALS" 2>/dev/null || true
+      fi
+      # Remove any existing LookAndFeelPackage so KDE doesn't override our colors
+      if grep -q "^LookAndFeelPackage=" "$KDEGLOBALS" 2>/dev/null; then
+        sed -i '/^LookAndFeelPackage=/d' "$KDEGLOBALS" 2>/dev/null || true
       fi
     else
       echo "" >> "$KDEGLOBALS"
       echo "[KDE]" >> "$KDEGLOBALS"
-      echo "LookAndFeelPackage=org.kde.breezedark.desktop" >> "$KDEGLOBALS"
       echo "widgetStyle=Breeze" >> "$KDEGLOBALS"
     fi
     chown "$GRUVBOX_USER":"$GRUVBOX_USER" "$KDEGLOBALS"
 
-    # Write kdedefaults/package so KDE knows which look-and-feel to apply
+    # Write kdedefaults/kdeglobals with Gruvbox color scheme + icons
+    # Do NOT write kdedefaults/package — that sets the look-and-feel which
+    # overrides our color scheme. Leave it absent so KDE falls back to kdeglobals.
     KDE_DEFAULTS_DIR="$G_USER_HOME/.config/kdedefaults"
     mkdir -p "$KDE_DEFAULTS_DIR"
-    echo "org.kde.breezedark.desktop" > "$KDE_DEFAULTS_DIR/package"
-    # Write kdedefaults/kdeglobals with Gruvbox color scheme
+    # Remove any stale kdedefaults/package from a previous Breeze Dark install
+    rm -f "$KDE_DEFAULTS_DIR/package" 2>/dev/null || true
+    # Use correct icon variant
+    ICON_THEME_DEFAULT="Gruvbox-Plus-Dark"
+    [ "$GRUVBOX_VARIANT" = "light" ] && ICON_THEME_DEFAULT="Gruvbox-Plus-Light"
     cat > "$KDE_DEFAULTS_DIR/kdeglobals" << KDEDEFGLOBALS
 [General]
 ColorScheme=$ACTIVE_SCHEME
 
 [Icons]
-Theme=Gruvbox-Plus-Dark
+Theme=$ICON_THEME_DEFAULT
 
 [KDE]
 widgetStyle=Breeze
@@ -2473,7 +2465,7 @@ KDEDEFGLOBALS
       ICON_RELEASE_URL=$(curl -sL "https://api.github.com/repos/SylEleuth/gruvbox-plus-icon-pack/releases/latest" \
         -H "Accept: application/json" 2>/dev/null | \
         grep -o '"browser_download_url": *"[^"]*gruvbox-plus-icon-pack[^"]*\.zip"' | \
-        head -1 | sed 's/.*"browser_download_url": *"//;s/"//')
+        head -1 | sed 's/.*"browser_download_url": *"//;s/"//' || true)
 
       if [ -z "$ICON_RELEASE_URL" ]; then
         echo "[!] Could not fetch icon pack release URL. Falling back to clone."
@@ -2492,7 +2484,7 @@ KDEDEFGLOBALS
         echo "[*] Downloading icon pack from: $ICON_RELEASE_URL"
         ICON_ZIP="/tmp/gruvbox-plus-icons.zip"
         if dl_file "$ICON_RELEASE_URL" "$ICON_ZIP"; then
-          echo "[*] Downloaded icon pack ($(du -h "$ICON_ZIP" | cut -f1))"
+          echo "[*] Downloaded icon pack ($(du -h "$ICON_ZIP" 2>/dev/null | cut -f1 || echo '?'))"
           unzip -q -o "$ICON_ZIP" -d "$ICONS_DIR/" 2>/dev/null || true
           rm -f "$ICON_ZIP"
           echo "[*] Icons extracted to $ICONS_DIR/"
@@ -2845,7 +2837,7 @@ BASHRCEOF
         echo "[*] Copying wallpaper to $WP_FILE..."
         cp "$GRUVBOX_WALLPAPER_PATH" "$WP_FILE"
         chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR"
-        echo "[*] Wallpaper copied ($(du -h "$WP_FILE" | cut -f1))"
+        echo "[*] Wallpaper copied ($(du -h "$WP_FILE" 2>/dev/null | cut -f1 || echo '?'))"
       elif [ -n "$GRUVBOX_WALLPAPER_PATH" ] && [ ! -f "$GRUVBOX_WALLPAPER_PATH" ]; then
         echo "[!] Wallpaper file not found: $GRUVBOX_WALLPAPER_PATH"
         GRUVBOX_WALLPAPER=0
@@ -2854,7 +2846,7 @@ BASHRCEOF
         echo "[*] Downloading wallpaper from $GRUVBOX_WALLPAPER_URL..."
         if dl_file "$GRUVBOX_WALLPAPER_URL" "$WP_FILE"; then
           chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$WP_DIR"
-          echo "[*] Wallpaper downloaded ($(du -h "$WP_FILE" | cut -f1))"
+          echo "[*] Wallpaper downloaded ($(du -h "$WP_FILE" 2>/dev/null | cut -f1 || echo '?'))"
         else
           echo "[!] Failed to download wallpaper. Skipping."
           rm -f "$WP_FILE"
@@ -2874,35 +2866,18 @@ BASHRCEOF
         AUTOSTART_DIR="$G_USER_HOME/.config/autostart"
         mkdir -p "$AUTOSTART_DIR"
 
-        # Create the apply script
-        WP_APPLY_SCRIPT="$G_USER_HOME/.local/bin/apply-gruvbox-wallpaper.sh"
-        mkdir -p "$G_USER_HOME/.local/bin"
-        cat > "$WP_APPLY_SCRIPT" << 'WPAPPLY'
-#!/bin/bash
-# Apply gruvbox wallpaper on first login, then remove this autostart entry.
-WP_FILE="WP_FILE_PLACEHOLDER"
-if [ -f "$WP_FILE" ]; then
-  plasma-apply-wallpaperimage "$WP_FILE" 2>/dev/null
-fi
-# Remove the autostart desktop file and this script
-rm -f "$HOME/.config/autostart/apply-gruvbox-wallpaper.desktop"
-rm -f "$0"
-WPAPPLY
-        sed -i "s|WP_FILE_PLACEHOLDER|$WP_FILE|" "$WP_APPLY_SCRIPT"
-        chmod 755 "$WP_APPLY_SCRIPT"
-
         # Create autostart desktop file
         cat > "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop" << 'WPDESKTOP'
 [Desktop Entry]
 Type=Application
 Name=Apply Gruvbox Wallpaper
-Exec=WP_SCRIPT_PLACEHOLDER
+Exec=bash -c 'sleep 3 && plasma-apply-wallpaperimage "WP_FILE_PLACEHOLDER" 2>/dev/null; rm -f "$HOME/.config/autostart/apply-gruvbox-wallpaper.desktop"; rm -f "$HOME/.local/bin/apply-gruvbox-wallpaper.sh"'
 Icon=preferences-desktop-wallpaper
 Terminal=false
-X-KDE-autostart-phase=2
+X-KDE-autostart-condition=plasmashell
 OnlyShowIn=KDE
 WPDESKTOP
-        sed -i "s|WP_SCRIPT_PLACEHOLDER|$WP_APPLY_SCRIPT|" "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop"
+        sed -i "s|WP_FILE_PLACEHOLDER|$WP_FILE|" "$AUTOSTART_DIR/apply-gruvbox-wallpaper.desktop"
 
         chown -R "$GRUVBOX_USER":"$GRUVBOX_USER" "$G_USER_HOME/.config/autostart" "$G_USER_HOME/.local/bin"
 
@@ -3203,13 +3178,13 @@ fi
 echo ""
 echo "[*] Final ownership fix..."
 for user_home in /home/*; do
-  owner=$(stat -c %U "$user_home" 2>/dev/null)
+  owner=$(stat -c %U "$user_home" 2>/dev/null || true)
   if [ -n "$owner" ] && [ "$owner" != "root" ]; then
-    chown -R "$owner":"$owner" "$user_home/.config" 2>/dev/null
-    chown -R "$owner":"$owner" "$user_home/.local" 2>/dev/null
-    chown -R "$owner":"$owner" "$user_home/Pictures" 2>/dev/null
+    chown -R "$owner":"$owner" "$user_home/.config" 2>/dev/null || true
+    chown -R "$owner":"$owner" "$user_home/.local" 2>/dev/null || true
+    chown -R "$owner":"$owner" "$user_home/Pictures" 2>/dev/null || true
     # Clean up icon pack clone if it exists (fallback from Phase 14)
-    [ -d "$user_home/gruvbox-plus-icon-pack" ] && chown -R "$owner":"$owner" "$user_home/gruvbox-plus-icon-pack" 2>/dev/null
+    [ -d "$user_home/gruvbox-plus-icon-pack" ] && chown -R "$owner":"$owner" "$user_home/gruvbox-plus-icon-pack" 2>/dev/null || true
     echo "[*] Fixed ownership for $owner: .config .local Pictures"
   fi
 done
