@@ -125,10 +125,18 @@ xinstall() {
   local output
   local real_error=0
 
-  # Capture output, strip carriage returns from xbps progress bars.
-  # xbps-install uses \r to update progress in-place; inside $(...) capture
-  # those \r chars become literal and each progress tick prints as a new line.
-  output=$(xbps-install -y "${pkgs[@]}" 2>&1 | tr -d '\r') || true
+  # xbps-install output goes to two places:
+  #   - Progress bar: fetch_cb.c checks isatty(STDOUT_FILENO). When not a tty
+  #     (our script pipes stdout through tee), it prints to STDOUT with \n
+  #     per tick: "filename: [size N%] rate ETA: time\n" — one line per tick.
+  #   - Status messages (state_cb.c): ALL go to STDOUT via printf():
+  #     "[*] Downloading packages", "pkg: installed successfully", etc.
+  #   - Errors (state_cb.c): go to STDERR via xbps_error_printf().
+  #
+  # We capture stdout+stderr, then filter out the progress bar lines (they
+  # match the pattern: "filename: [size N%] rate ETA:" or "filename: size [avg rate:").
+  # This keeps the useful status/error messages without the progress spam.
+  output=$(xbps-install -y "${pkgs[@]}" 2>&1 | grep -v 'ETA:.*[0-9]*m[0-9]*s$\|avg rate:') || true
 
   while IFS= read -r line; do
     case "$line" in
