@@ -116,7 +116,10 @@ xinstall() {
   local output
   local real_error=0
 
-  output=$(xbps-install -y "${pkgs[@]}" 2>&1) || true
+  # Capture output, strip carriage returns from xbps progress bars.
+  # xbps-install uses \r to update progress in-place; inside $(...) capture
+  # those \r chars become literal and each progress tick prints as a new line.
+  output=$(xbps-install -y "${pkgs[@]}" 2>&1 | tr -d '\r') || true
 
   while IFS= read -r line; do
     case "$line" in
